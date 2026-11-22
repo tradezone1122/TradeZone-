@@ -1,0 +1,64 @@
+{
+  "name": "create-oma-app",
+  "version": "0.8.13",
+  "description": "Scaffold PR review, security analysis, and multi-agent DAG starters on @open-multi-agent/core.",
+  "type": "module",
+  "bin": {
+    "create-oma-app": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "template/_env.example",
+    "template/_env.ollama",
+    "template/_gitignore",
+    "template/src/demo-adapter.ts",
+    "template/src/runtime.ts",
+    "template/src/report.ts",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "typecheck:template": "node scripts/typecheck-templates.mjs",
+    "test": "vitest run",
+    "test:scaffold": "node scripts/test-scaffold.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "open-multi-agent",
+    "multi-agent",
+    "scaffold",
+    "create",
+    "starter",
+    "ai",
+    "agent"
+  ],
+  "author": {
+    "name": "YuanASI (Shenzhen YuanASI Technology Co., Ltd.)",
+    "email": "co@yuanasi.com",
+    "url": "https://yuanasi.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-multi-agent/open-multi-agent.git",
+    "directory": "packages/create-oma-app"
+  },
+  "homepage": "https://github.com/open-multi-agent/open-multi-agent/tree/main/packages/create-oma-app#readme",
+  "bugs": {
+    "url": "https://github.com/open-multi-agent/open-multi-agent/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.15",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}

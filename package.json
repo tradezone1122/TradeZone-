@@ -1,0 +1,24 @@
+{
+  "name": "tradezone-ai-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TradeZone AI Platform: self-hosted multi-agent AI coding platform (API server, agent runtime, MCP, tools, Web IDE).",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "vendor/open-multi-agent/packages/core",
+    "packages/server",
+    "apps/web"
+  ],
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "build": "npm run build -w @open-multi-agent/core && npm run build -w @tradezone/server && npm run build -w @tradezone/web",
+    "build:oma": "npm run build -w @open-multi-agent/core",
+    "dev:server": "npm run dev -w @tradezone/server",
+    "dev:web": "npm run dev -w @tradezone/web",
+    "start": "npm run start -w @tradezone/server",
+    "test": "npm run test -w @tradezone/server && npm run test -w @tradezone/web",
+    "typecheck": "npm run typecheck -w @tradezone/server && npm run typecheck -w @tradezone/web",
+    "manifest": "node scripts/build-source-manifest.mjs"
+  }
+}

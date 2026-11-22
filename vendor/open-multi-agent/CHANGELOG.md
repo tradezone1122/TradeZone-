@@ -1,0 +1,1599 @@
+# Changelog
+
+## Unreleased
+
+## 1.24.0 - 2026-11-13
+
+### Added
+
+- Added an experimental createImageTool so a model can call runImage to generate
+  or edit images from a tool call.
+- Added the nvidia provider for NVIDIA NIM models, defaulting to the hosted NIM
+  endpoint and falling back to the NVIDIA API key environment variable, with
+  base URL support for self-hosted deployments.
+
+### Changed
+
+- Claude Opus 4.7, Sonnet 5, and later models now omit the sampling parameters
+  temperature, top_p, and top_k, which those models reject, on the Anthropic
+  adapter and on Bedrock (foundation-model ids, inference profiles, and ARNs).
+  Older Claude models and non-Claude Anthropic-compatible models keep their
+  sampling values.
+- The provider template now suggests current models instead of retired ones: an
+  Azure deployment-name placeholder, a current Haiku for Bedrock, and a current
+  Gemini flash model.
+- Provider safety and guardrail finish reasons now map to content_filter:
+  Bedrock guardrail-intervened and content-filtered, and Gemini safety,
+  recitation, blocklist, prohibited-content, SPII, and image-safety finishes.
+
+### Fixed
+
+- Tool results remain contiguous when sliding-window and summarize strategies
+  rewrite history, and split results stay with their call when trimming context.
+- Gemini thinking tokens are counted in output usage for streaming and
+  non-streaming responses.
+- Parallel streamed tool calls that omit an index no longer collapse into one
+  call in the OpenAI, Azure OpenAI, and Copilot adapters.
+- Aborting a run now cancels a pending tool approval gate instead of waiting for
+  the decision.
+- Journal draining continues after an append failure so events queued during the
+  failed batch are not stranded.
+- The built-in file edit tool inserts the replacement string literally instead
+  of expanding dollar-sign replacement patterns.
+- MCP tool listing rejects repeated pagination cursors instead of looping.
+- A failing message subscriber no longer prevents delivery to the remaining
+  subscribers.
+- Message read state ignores unknown, other-agent, or invisible-broadcast ids
+  while existing snapshots still load.
+- create-oma-app reports the active Node.js version when the no-key demo fails,
+  suggests Node 22 or 24 on Node 20.0.0, and prints the change-directory
+  instruction right before the demo command, quoting paths that contain spaces.
+
+### Compatibility
+
+- Core changes are additive: existing exports and signatures remain, and prior
+  provider behavior is otherwise preserved. Adding nvidia to the exported
+  supported provider union can require a new branch in exhaustive TypeScript
+  switches over provider ids.
+- The image tool is experimental; pin an exact core version if depending on its
+  options or result shape. Without a resolver an images input is rejected, and
+  with one an unknown reference fails before any model call.
+- Callers branching on stop reason must fold the old provider-specific strings
+  into content_filter, and should re-check logic that assumed a tool-use turn
+  cannot report content_filter.
+- Sampling values set for those Claude models are no longer sent; values passed
+  in `extraBody` are still forwarded. Bedrock applies the rule only when the
+  model id, inference profile, or ARN names the Claude model; non-Claude Bedrock
+  models keep their parameters.
+- Recalibrate token budgets, cost-estimate assertions, and eval totals for
+  Gemini thinking models because output usage now includes thinking tokens.
+- Gate and approval code must expect the gate not to be invoked when the abort
+  signal is already aborted, an abort error tool result instead of a decision
+  when the signal fires mid-wait, and no approval record for aborted calls.
+  Journal error handlers must tolerate more than one callback per run.
+- Consumers of message read state should expect ids that do not resolve to
+  retained, addressed messages to be ignored; snapshots written by earlier
+  versions still restore.
+- Refresh snapshots and assertions for CLI and create-oma-app terminal text,
+  including provider-template suggestions, the change-directory instruction
+  placement, and Node-version demo-failure guidance.
+- `@open-multi-agent/otel` is not republished: it did not change, and core
+  1.24.0 stays inside its `^1.11.0` range.
+
+## 1.23.0 - 2026-10-30
+
+### Breaking changes
+
+This release ships as a minor version, so a caller on a `^1.x` range receives
+it without an explicit upgrade step. A project that pins zod below 3.25, code
+that uses object-only members of `taskProfileSchema` or `gatePolicySchema`, and
+a coordinator plan over the new size caps can stop working after the upgrade.
+The individual entries are under Changed below.
+
+- **`zod` is now a required peer dependency, `^3.25.0 || ^4.6.6`.** A project
+  that depends on zod 3.23 or 3.24 has to upgrade zod first; until it does,
+  npm stops with a peer dependency conflict. With a package manager that does
+  not install peers automatically, add `zod` to your own dependencies.
+- **`taskProfileSchema` and `gatePolicySchema` are typed as `ZodSchema<T>`.**
+  Object-only members such as `.extend()` and `.shape` no longer type-check on
+  them. Define your own schema where you extended them.
+- **Coordinator plans are capped.** A plan with more than 200 tasks, a task with
+  more than 200 `dependsOn` entries, or more than 64 `requires.requiredTools`
+  or `requires.requiredCapabilities` entries now fails validation.
+
+### Added
+
+- Zod 4 support. Tool `inputSchema` and `outputSchema`,
+  `AgentConfig.outputSchema`, judge `verdictSchema`, and `SharedMemory.write()`
+  schemas accept Zod 4 classic schemas alongside Zod 3, and `zodToJsonSchema()`
+  converts both with the same rules. A Zod 4 schema previously converted to
+  `{}`, so the model saw a tool with no parameters.
+
+### Changed
+
+- `zod` moved from `dependencies` to a required peer dependency with the range
+  `^3.25.0 || ^4.6.6`. npm installs required peers automatically; with other
+  package managers, add `zod` to your own dependencies. Zod releases before
+  3.25 are no longer supported.
+- `taskProfileSchema` and `gatePolicySchema` are now typed as
+  `ZodSchema<TaskProfile>` and `ZodSchema<GatePolicy>`, so the published
+  declarations no longer depend on the Zod major core was built with. Code
+  that called object-only methods such as `.extend()` on them needs its own
+  schema.
+- Validation failures that reach the model now list at most 20 issues, each
+  cut to 500 characters, followed by a count of the rest. This covers tool
+  input and output validation, the structured-output corrective retry, and
+  `SharedMemory.write()` schema checks. An oversized invalid array used to
+  produce one line per invalid element, which could push the next request past
+  the model's context window.
+- Coordinator plans are capped at 200 tasks, `dependsOn` at 200 entries, and
+  `requires.requiredTools` and `requires.requiredCapabilities` at 64 entries
+  each. A plan over a cap fails validation like any other invalid plan.
+- Projects generated from the `create-oma-app` `pr-review` and `security`
+  templates now depend on `zod` `^4.6.6` instead of `^3.23.0`.
+
+### Fixed
+
+- A tool or `onToolCall` gate that throws a value `JSON.stringify()` cannot
+  serialize, such as a circular object or a bigint, now produces an error
+  `ToolResult` like any other tool failure. `ToolExecutor.execute()` used to
+  reject in that case, which failed the whole `executeBatch()`, and inside an
+  agent the model saw the serializer's error instead of the thrown value.
+- Streaming through the OpenAI adapter, including custom `baseURL` endpoints,
+  now keeps parallel tool calls apart when the server omits the tool-call
+  `index`, as Gemini's OpenAI-compatible endpoint does. Those calls used to
+  collapse into one call with the last id and name and concatenated arguments,
+  so the agent ran one tool call with invalid input instead of several.
+- `zodToJsonSchema()` now converts a nullable string enum such as
+  `z.enum(['a', 'b']).nullable()` to `anyOf` with a `null` branch, for both
+  Zod 3 and Zod 4 schemas. It used to add `null` to `type` while the `enum`
+  list left it out, so a tool or structured-output schema rejected the `null`
+  that the Zod schema accepts.
+- `zodToJsonSchema()` no longer lists the reverse-mapping keys of a numeric
+  TypeScript enum. For `enum N { A = 1, B = 2 }`, Zod 3's `z.nativeEnum(N)` and
+  Zod 4's `z.enum(N)` now convert to `{ enum: [1, 2] }` instead of
+  `{ enum: ['A', 'B', 1, 2] }`, so the model is no longer offered values that
+  validation then rejects.
+- Text tool-call extraction for local models no longer drops every call that
+  follows an unmatched double quote in the prose, such as the inch mark in
+  `12"`. Quotes now delimit strings only inside a JSON object, so a lone `{`
+  inside quoted prose, such as `"{"`, now hides the calls after it the same
+  way an unquoted lone `{` already did.
+
+### Security
+
+- Applications can now upgrade to zod 4.6.6 or later, the first release that
+  fixes GHSA-mrhx-c7xc-m3w5 (memory exhaustion from oversized arrays). Core
+  previously required Zod 3, which has no fixed release.
+
+### Compatibility
+
+- `@open-multi-agent/otel` is not republished: it did not change, and core
+  1.23.0 stays inside its `^1.11.0` range.
+
+## 1.22.0 - 2026-10-23
+
+### Breaking changes
+
+This release ships as a minor version, so a caller on a `^1.x` range receives
+it without an explicit upgrade step. A caller that passes malformed task
+metadata or disables thinking on MiniMax-M3.1-Flash still installs, then fails
+when the code runs. The individual entries are under Changed and Fixed below.
+
+- **`Team.addTask()` now honors every task option it accepts.** Options that
+  were previously discarded — retry settings, memory scope, dependency
+  payload, role, priority, metadata, capability requirements, and consensus
+  verification — now affect queue ordering, retries, capability gating, memory
+  scope, and consensus verification. Malformed metadata that was previously
+  ignored now fails validation before the task is enqueued.
+- **MiniMax-M3.1-Flash cannot disable thinking.** A call with
+  `thinking: { enabled: false }` now throws before the request, where earlier
+  versions forwarded it with thinking ignored. Use MiniMax-M3 when disabled
+  thinking is required, or pass an explicit `extraBody.thinking` override.
+
+### Added
+
+- MiniMax-M3.1-Flash support, including adaptive thinking, reasoning-effort
+  forwarding, and native reasoning replay on tool-call follow-ups.
+- The MiniMax adapter now reports tool-use-only native reasoning echo support
+  for follow-up requests.
+
+### Changed
+
+- New MiniMax configurations default to MiniMax-M3.1-Flash; saved
+  configurations, explicit MiniMax-M3, legacy IDs, and custom model IDs
+  continue to be forwarded unchanged.
+- For MiniMax-M3, enabled thinking now maps to adaptive and disabled thinking
+  to disabled; reasoning effort remains ignored for M3.
+- The `oma` provider reference and default-model hint for MiniMax now name
+  MiniMax-M3.1-Flash, so newly generated provider templates use that default.
+- The core package README, which ships in the core tarball, now summarizes
+  capabilities and quick starts more concisely.
+
+### Fixed
+
+- `Team.addTask()` now forwards every accepted task option instead of only
+  title, description, assignee, and dependencies.
+- Malformed task metadata now fails `createTask()` validation before a task
+  enters the queue instead of being silently dropped.
+
+### Compatibility
+
+- Existing explicit MiniMax-M3, legacy, and custom MiniMax model IDs retain
+  pass-through behavior; only newly generated configurations switch to Flash.
+  Generated projects that need M3 should set `model` explicitly.
+- Audit every `Team.addTask()` call site: options that previously had no effect
+  now affect retries, priority, capability requirements, memory scope, and
+  consensus verification, and consensus or judge settings can add model calls
+  and cost.
+- Ensure task metadata satisfies `TaskMetadata`, including homogeneous arrays;
+  malformed metadata that was previously ignored now causes `addTask()` to
+  throw.
+- No public export or signature was removed or narrowed, and no `engines` or
+  package-dependency change ships; upgrading needs no code change beyond the
+  two behavior changes above.
+- `@open-multi-agent/otel` is not republished: it did not change, and core
+  1.22.0 stays inside its `^1.11.0` range.
+
+## 1.21.3 - 2026-10-16
+
+### Fixed
+
+- Symlink loops and chains longer than the kernel's link limit now fail the
+  sandbox check with a `Too many levels of symbolic links` error. Earlier
+  versions also failed these writes, with the filesystem error instead.
+- A symlink target that ends in a separator or `.` must now name an existing
+  directory, as the kernel requires. On macOS, earlier versions resolved such a
+  link to the file of that name, so `file_write` overwrote it.
+
+### Security
+
+- `file_write` can no longer create a file outside the agent's working directory
+  through a dangling symlink (GHSA-h42w-g3ch-rjjm, CVE-2026-108600). Versions
+  1.5.0 through 1.21.2 are affected. The sandbox check now resolves a dangling
+  symlink to the target it names, one path component at a time as the kernel
+  does, so a link pointing outside the root is rejected like any other outside
+  path and a link pointing inside it keeps working. Every built-in filesystem
+  tool shares this check.
+
+### Compatibility
+
+- No public export, signature, or error `ToolResult` shape changed; upgrading
+  needs no code change.
+- Symlinks that resolve inside the working directory work as before, including
+  a dangling link whose in-root target `file_write` creates.
+- Writing through a dangling symlink whose target is outside the working
+  directory now returns the "outside the agent's working directory" error. To
+  write there on purpose, widen `AgentConfig.cwd` or
+  `OrchestratorConfig.defaultCwd` to include that location.
+- Sandbox failures from symlink resolution use new messages that start with
+  `Could not resolve path`; check `isError` rather than matching message text.
+- `@open-multi-agent/otel` is not republished: it did not change and depends on
+  core through a semver range.
+
+## 1.21.2 - 2026-10-09
+
+### Changed
+
+- Updated the core package README, which ships in the core tarball, to route
+  community feedback to GitHub Issues instead of Discussions.
+
+### Compatibility
+
+- No public API, runtime, provider, template, or published dependency change is
+  present; upgrading requires no caller action.
+- create-oma-app templates will pin the new core patch exactly, keeping
+  scaffolded projects on a consistent core version.
+- Internal release tooling only: release-bot defaults now allow up to 48
+  registry polls at 10s per package instead of 9. Maintainers needing the old
+  fail-fast behavior can still pass pollAttempts and pollDelayMs explicitly;
+  this package is private and never published.
+- If the reported partial publication of the previous release is confirmed,
+  consumer action is still not required; recovery is a maintainer dispatch of
+  publish.yml on the exact merged release commit reachable from main with a
+  successful CI run.
+
+## 1.21.1 - 2026-10-02
+
+### Fixed
+
+- Clarified runImage() documentation: an ImageModelError thrown by validate
+  follows the normal retry and model-fallback rules, values other than
+  ImageModelError propagate to the caller, and exhausted model failures still
+  resolve as a failed result.
+
+### Compatibility
+
+- No public API, runtime, or dependency changes: existing ^1.x callers upgrade
+  with no code changes.
+- Callers that read the previous JSDoc as an exhaustive list of rejection
+  reasons ('rejects only for invalid options or when signal aborts') should rely
+  on the updated wording; code written against the old text keeps working.
+- create-oma-app takes a patch bump only to refresh its pinned core dependency
+  in generated templates; otel is unchanged and not republished, but its
+  post-publish smoke check validates compatibility against the new core.
+
+## 1.21.0 - 2026-09-25
+
+### Added
+
+- Added runImage() for image generation and editing across an ordered chain of
+  image models, with per-model retries that honor Retry-After, fallback on
+  non-retryable failures, an optional validate check on each returned image, and
+  a record of every provider call through result.attempts and onAttempt.
+- Added the ImageModelAdapter interface and four built-in adapters that call
+  provider HTTP APIs directly and honor egressPolicy: OpenAIImageAdapter (OpenAI
+  Images API and OpenAI-compatible endpoints), SeedreamImageAdapter (Seedream on
+  Volcengine Ark), OpenRouterImageAdapter (OpenRouter /images, sending input
+  images as input_references), and BlackForestLabsImageAdapter (FLUX models,
+  submit/poll/download).
+- Added ImageModelError with normalized ImageModelErrorType values;
+  isRetryableError() returns its retryable flag, its optional params carries
+  details of already-accepted provider work such as a task ID and cost into the
+  failed attempt record, and ImageCallOptions.maxRetryAfterMs tells an adapter
+  that waits internally the longest Retry-After runImage() allows.
+- Image adapters classify safety or moderation rejections, including upstream
+  rejections forwarded in error.metadata, as non-retryable content_policy, fail
+  rather than drop input they cannot use, and report the media type read from
+  the returned image bytes.
+
+### Changed
+
+- Enabling thinking without budgetTokens now sends adaptive thinking on Claude
+  Opus 4.7, Sonnet 5, and later, which previously rejected the request with HTTP
+  400; pre-adaptive models keep the 1024-token budget default.
+- The task profiler omits temperature for Claude models that reject non-default
+  sampling parameters, avoiding HTTP 400 routing failures on Opus 4.7, Sonnet 5,
+  and later.
+- The bash tool description now states that it is not confined to the agent's
+  working directory, prefers the file tools, grep, and glob for file work, and
+  reports a non-zero exit code; built-in tool descriptions now match glob's path
+  output, and the synthesis prompt no longer carries an unscoped JSON-only
+  instruction.
+- create-oma-app is republished as a patch so its templates pin the new core
+  version exactly; otel is unchanged and keeps its semver range against core.
+
+### Fixed
+
+- Enabling thinking without budgetTokens no longer produces HTTP 400 on current
+  Claude models (Opus 4.7, Sonnet 5, and later); those models now receive
+  adaptive thinking instead of an explicit budget.
+- The task profiler no longer sends temperature to Claude models that reject
+  non-default sampling parameters, fixing HTTP 400 routing failures on Opus 4.7,
+  Sonnet 5, and later.
+
+### Compatibility
+
+- No breaking changes: core public API changes are additive exports only, no
+  export was removed, renamed, or narrowed, and no engines floor or published
+  dependency major changed; isRetryableError() gains an answer for
+  ImageModelError while all pre-existing error classes keep their prior answers,
+  and no import path changes.
+- Callers that pass an explicit thinking.budgetTokens on Claude Opus 4.7 or
+  Sonnet 5 must still omit it; passing it explicitly still emits budget_tokens
+  and is rejected with HTTP 400.
+- Callers that relied on the implicit 1024-token thinking budget on Claude
+  4.6-generation models now get adaptive thinking and should re-check maxTokens
+  and thinking-cost assumptions.
+- If a model ID is routed through a proxy, alias, or non-canonical suffix,
+  verify thinking and temperature behavior against that endpoint before
+  upgrading: the legacy-model list in anthropic-models.ts is closed, and unknown
+  IDs default to adaptive thinking and no temperature.
+- For the new image adapters, supply credentials via apiKey or the environment
+  (OPENAI_API_KEY, OPENROUTER_API_KEY, ARK_API_KEY, BFL_API_KEY);
+  providerOptions keys that carry the request itself (prompt, model, n, input
+  image fields, mask, response_format where applicable) are rejected with a
+  TypeError at construction. A request's size overrides a providerOptions size
+  default; Seedream watermark is set on the adapter, with providerOptions
+  watermark overriding the adapter's watermark option. It has no per-request
+  override.
+- An egressPolicy allowlist used with the Black Forest Labs adapter must include
+  the poll and download hosts in addition to the API origin.
+- create-oma-app republishes as a patch so its templates pin the new core
+  version exactly; already-generated projects keep working and can upgrade core
+  independently.
+- otel stays at its current version with its existing semver range against core;
+  it is not republished and remains compatible with the new core.
+
+## 1.20.0 - 2026-09-18
+
+### Added
+
+- Added an optional positive-integer GateThreshold minSamples guard. A threshold
+  below the minimum reports insufficient_samples with the observed count as
+  actual and the configured minimum as limit; score metrics compare against the
+  selected aggregate scoredCount, passRate compares against passSampleCount, and
+  tag-scoped thresholds use the tag aggregate own counts.
+- Added ScorerAggregate passSampleCount, the number of scored records that
+  define pass. It is emitted whenever passRate is emitted, including on tag
+  aggregates.
+
+### Changed
+
+- Baseline regression comparisons are skipped with a warning when either the
+  current or baseline aggregate holds fewer than minSamples samples; this can
+  turn a previously reported regression failure into a warning.
+- A report or baseline written before passSampleCount existed fails closed at
+  zero samples for passRate guards rather than skipping the guard.
+- Updated the shipped README and npm package description to lead with OMA as the
+  project name and reposition around owning, approving, and auditing.
+
+### Compatibility
+
+- Omitting minSamples preserves previous threshold and regression behavior, and
+  the report schema version remains unchanged, so existing gate policies and
+  reports need no migration to keep prior behavior.
+- Before enabling minSamples on a passRate threshold, regenerate baselines with
+  a core version that emits passSampleCount; otherwise that regression
+  comparison skips with a warning, and a passRate guard evaluated against an old
+  current report fails closed with actual zero.
+- Adding minSamples changes gate outcomes in both directions: a short baseline
+  can downgrade a regression failure to a warning, while a short current report
+  still fails its own threshold with insufficient_samples.
+- A previously ignored minSamples key with a non-positive or non-integer value
+  now throws minSamples must be a positive integer; remove or correct such keys
+  in existing gate policies.
+- If code exhaustively switches on GateFailure kind, add an insufficient_samples
+  case. The new kind carries the observed sample count as actual and the
+  configured minimum as limit, with optional scorer, metric, and tag
+  coordinates.
+- Report JSON now includes passSampleCount on every aggregate that carries
+  passRate, including tag aggregates. Update snapshots, hashes, or strict
+  validators; the unchanged schema version cannot distinguish the two shapes.
+- Do not rely on an older core to enforce a policy that declares minSamples,
+  because that core strips the unknown key and silently skips the guard; pin the
+  gate execution side to a core version that supports it.
+- No Node or dependency action is required: the core manifest change is a
+  description-only edit, and the otel and create-oma-app workspaces have no
+  changes in this range.
+
+## 1.19.0 - 2026-09-11
+
+### Added
+
+- Added an opt-in authoritative run store through `OrchestratorConfig.runStore`
+  and `RunTasksOptions.runStore`; it gives a logical run a durable lifecycle
+  record, an execution lease, and a monotonically increasing fencing token so
+  one worker at a time advances the run and a worker that was taken over cannot
+  write after the takeover.
+- Added the `RunStore` interface, the `MemoryStoreRunStore` adapter over any
+  `MemoryStore` with compare-and-set, and the `RunLedger` and `RunLeaseHandle`
+  surface for reading, cancelling, and resuming a run from outside its worker.
+
+### Changed
+
+- `TeamConfig.maxConcurrency` now bounds the agent pool for that team's runs
+  instead of being accepted and ignored. It intersects with
+  `OrchestratorConfig.maxConcurrency`, and the smaller value wins, so a team can
+  narrow its own pool but never widen it past the orchestrator ceiling. A team
+  that set a cap below the orchestrator's was previously running at the
+  orchestrator value and now runs at its own lower value; raise or remove the
+  team cap to keep the previous throughput. A cap that is not an integer of at
+  least 1 is reported as an `INVALID_TEAM_MAX_CONCURRENCY` warning on
+  `onProgress` and the orchestrator value applies.
+- With a run store configured, execution-ownership and run-lifecycle writes fail
+  closed instead of following the best-effort semantics of checkpoint and
+  telemetry writes: a fenced-out checkpoint write never reaches the store, a
+  lost lease stops the run at the dispatch gate, and a worker that lost its
+  lease reports the fence failure rather than success. Runs with no run store
+  configured are unchanged.
+- The `oma` CLI default model for `provider: 'deepseek'` is now `deepseek-flash`
+  (DeepSeek-V4.1-Flash), replacing `deepseek-v4-flash`. The retired name still
+  resolves, and library users that pass an explicit model are unaffected.
+  Provider docs, adapter JSDoc, the scaffolder env template, and the DeepSeek
+  examples moved to the same name.
+- The DeepSeek adapter JSDoc no longer states that thinking runs at high effort.
+  The adapter forwards whatever effort the caller passes and sets none itself;
+  runtime behavior is unchanged.
+- Corrected published JSDoc that misstated runtime behavior, including
+  `onAgentStream` coverage in `runTasks()`, `done` stream-event payloads per
+  layer, retryable-error classification, and the `RedactingStore` example
+  constructor call.
+- The `delegate_to_agent` error returned when the pool has no free slot now
+  points at both ceilings: "Increase maxConcurrency on the orchestrator or the
+  team" rather than the orchestrator alone. Callers that match on that string
+  should update it.
+- The `@open-multi-agent/core` package description on npm was rewritten to lead
+  with running in your own environment, approval gates, and a verifiable record
+  of every run.
+- LICENSE now names Shenzhen YuanASI Technology Co., Ltd. alongside the
+  open-multi-agent contributors, package READMEs close with a maintainer line,
+  and the `author` field in the published package.json files points at YuanASI.
+  The MIT terms are unchanged.
+
+### Compatibility
+
+- Runs that do not configure a run store keep the existing single-process
+  checkpoint and restore behavior. `restore()` is the resume command either way;
+  with a run store it additionally makes a suspended record eligible and takes
+  the lease before reconciling the approval ledger.
+- A team that set `maxConcurrency` below the orchestrator value previously ran
+  at the orchestrator value and now runs at its own lower cap. Raise or remove
+  the team cap, or raise `OrchestratorConfig.maxConcurrency`, to keep the
+  previous parallelism; leave the field unset to keep the old behavior exactly.
+- Non-integer or less-than-1 team caps no longer pass through silently. They
+  emit an `INVALID_TEAM_MAX_CONCURRENCY` warning on `onProgress` and fall back
+  to the orchestrator value. This is a new code on the existing `warning` event;
+  no event type was added.
+- The old `deepseek-v4-flash` name still resolves, and library callers that pass
+  an explicit `model` are unaffected. Cost maps, telemetry filters, or snapshot
+  assertions that key on the model string should be reviewed because the CLI
+  default now sends `deepseek-flash`.
+- No existing export was removed or renamed and every new config field is
+  optional, so existing code keeps compiling and running unchanged unless it
+  opts into the run store or relies on ignored team concurrency caps.
+- The otel package changed only in shipped-file metadata; it has no public API
+  or runtime change.
+- The `.env.example` that create-oma-app scaffolds now names `deepseek-flash`
+  in the commented-out `OMA_MODEL` line of its DeepSeek section; existing
+  generated projects are not rewritten by this release.
+
+## 1.18.0 - 2026-09-04
+
+### Added
+
+- Added VideoBlock with base64 or absolute HTTP(S) URL sources to the public
+  content-block API, serialized as an OpenAI-compatible video_url part for
+  MiniMax-compatible chat.
+- Added UnsupportedContentBlockError for adapters that cannot represent a
+  content block; unsupported video input is terminal and excluded from retry
+  classification.
+- Tool input and output are now recorded on execute_tool v2 spans as
+  oma.tool.input and oma.tool.output when the trace capture policy opts in.
+- Added contentCapture: { mode: 'upstream-policy' } to
+  @open-multi-agent/otel 0.1.3, forwarding core's opt-in tool input/output
+  attributes.
+- Evaluation judgePrompt can now return per-judge structured LLMMessage[] input
+  in addition to the existing plain-text form.
+
+### Changed
+
+- Context-summary preparation now strips video blocks like image blocks, and
+  token estimation sizes inline video as rich media so compaction triggers
+  correctly.
+- The @open-multi-agent/otel contentCapture option is widened from only
+  'disabled' to 'disabled' or 'upstream-policy'; default behavior is unchanged.
+- Evaluation judgePrompt is now invoked once per judge instead of once per
+  score() call, so a quorum calls it once for each member. Callers whose
+  judgePrompt is costly or has side effects will see the additional calls.
+
+### Fixed
+
+- Fixed v2 trace sinks silently dropping tool input/output that the legacy
+  onTrace callback delivered; recording is now gated by an explicit capture
+  policy with default behavior unchanged.
+
+### Compatibility
+
+- Core remains backward-compatible: all reviewable executable changes are
+  additive exports, an additive ContentBlock union member, trailing optional
+  parameters, or opt-in trace attributes; no published dependency/peer ranges or
+  engine floors changed.
+- TypeScript consumers doing exhaustive matching over ContentBlock should add a
+  'video' case or default when upgrading because the union is widened.
+- No migration is required for default callers: v2 tool I/O capture remains off,
+  otel contentCapture remains disabled by default, and existing retry
+  classifications are unchanged.
+- To retain tool arguments/results previously delivered by the legacy onTrace
+  callback, enable the core capture policy and the otel upstream-policy mode;
+  both opt-ins are required, and the mode needs @open-multi-agent/otel 0.1.3 or
+  newer.
+- Eval callers using judgePrompt's structured return path must append
+  buildStructuredOutputInstruction themselves; the existing (context) => string
+  signature is unchanged and its result is still wrapped by the text template.
+- Video sources must be absolute HTTP(S) URLs or raw base64 with a parameterless
+  MIME type; adapters without a video mapping fail fast with the terminal
+  unsupported-content-block error rather than retrying.
+
+## 1.17.0 - 2026-08-28
+
+### Added
+
+- Added an opt-in append-only run event journal (RunEvent vocabulary,
+  InMemoryRunJournal, JsonlRunJournal) that records every adapter call and the
+  per-block lineage of what the model saw.
+- Added verifyRun() to cold-verify a finished run journal, proving model-visible
+  blocks are reproducible from the events they name.
+- Added journal-watermarked checkpoint schema v5 for journaled runs; v1–v4
+  snapshots keep loading and unjournaled runs keep writing byte-identical v4
+  snapshots.
+- Added JournalLineageError and the enforceLineage switch; built-in context
+  strategies now emit context/replace events for every persistent rewrite.
+- Added per-call journal options to runAgent/runTasks options and
+  OrchestratorConfig, off by default with best-effort appends that never fail
+  the run.
+
+### Changed
+
+- Journaled restores now replay the journal tail after the stalest per-task
+  watermark, re-anchoring in-flight state and replaying committed tool results
+  that reached the journal but not the checkpoint.
+
+### Fixed
+
+- Aligned JSON Schema required fields with Zod validation.
+
+### Compatibility
+
+- Run journaling and checkpoint v5 are opt-in and additive: no public export
+  was removed or narrowed, and a run that leaves journaling off still writes
+  byte-identical v4 snapshots.
+- Generated JSON Schema for tool parameters now derives `required` from Zod's
+  own optionality check rather than the declared wrapper type. Three property
+  shapes change as a result: `.nullable()` becomes required, while `z.any()`
+  and `z.unknown()` stop being required. Built-in tools are unaffected, and
+  MCP tools forward the server's own schema, so this reaches custom tools that
+  use those shapes in a parameter position.
+
+## 1.16.1 - 2026-08-21
+
+### Added
+
+- Export eight previously internal public types from the package root
+  (ThinkingConfig, ToolResultMetadata, ProcessAgentBackendConfig,
+  ProcessBackendInputMode, CostEstimateContext, MessageBusSnapshot,
+  MessageSnapshot, MessageReadStateSnapshot)
+- Document DeepSeek V4-Pro-0813 / V4-Flash-0731 GA snapshots and default
+  thinking at high effort
+
+### Changed
+
+- Accepted verify revisions now refresh structured output together with the
+  revised answer instead of leaving stale parsed output
+- Slim core package READMEs, move contributor credits to CONTRIBUTORS.md, and
+  add LLM egress policy / shell executor coverage to the Chinese READMEs
+
+### Compatibility
+
+- All public API changes are additive: eight new type-only exports from the
+  package root
+- No public export was removed or narrowed, so existing consumers can upgrade
+  without code changes
+
+## 1.16.0 - 2026-08-16
+
+### Added
+
+- Add opt-in `EgressPolicy` (`offline` or `allowlist`) that restricts
+  framework-owned LLM network requests and intersects run-, agent-, and
+  orchestrator-level scopes.
+- Add pluggable `ShellExecutor` / `LocalShellExecutor` so callers control where
+  the built-in `bash` tool runs, exposed via the new
+  `@open-multi-agent/core/shell` subpath export.
+- Add `StructuredOutputValidationError`, which marks persistent schema failures
+  after the built-in corrective attempt as terminal for task-level retry.
+- Add `EgressPolicyError` with stable codes (`INVALID_EGRESS_POLICY`,
+  `EGRESS_POLICY_DENIED`, `EGRESS_POLICY_TARGET_UNRESOLVED`,
+  `EGRESS_POLICY_UNSUPPORTED`) for disallowed or unenforceable LLM egress.
+
+### Changed
+
+- The built-in `bash` tool now executes through a configurable shell executor
+  with a fail-closed backstop and 127 exit code on execution failure.
+- LLM adapters now resolve provider default base URLs and enforce egress policy
+  before opening framework-owned requests; policy use is opt-in and preserves
+  legacy unrestricted behavior.
+- Task retry now respects a result's stable `errorInfo.retryable: false`
+  classification.
+
+### Fixed
+
+- Structured-output agents no longer report a late valid response as success
+  after their whole-run timeout fired.
+- Task retry no longer reruns validation, cancellation, and budget failures when
+  the raw in-process error is unavailable.
+
+### Security
+
+- Add framework-owned LLM egress restriction (`EgressPolicy`) that can confine
+  provider transports to loopback or an explicit origin allowlist.
+
+### Compatibility
+
+- All core additions are backward compatible: new exports, optional config
+  fields, and new error classes; no public export was removed or narrowed and
+  the Node engines floor is unchanged.
+- Egress policy is opt-in: omitting egressPolicy on run/agent/orchestrator
+  config preserves legacy unrestricted LLM egress behavior.
+- Shell executor is opt-in: AgentConfig.shellExecutor /
+  OrchestratorConfig.defaultShellExecutor default to LocalShellExecutor for the
+  built-in bash tool; callers that invoked bashTool.execute() directly now own
+  the executor lifecycle and may observe results with exitCode 127 instead of a
+  thrown tool error when execution fails.
+- StructuredOutputValidationError and EgressPolicyError are now classified as
+  non-retryable by isRetryableError and mapped to terminal failure states;
+  task-level retry behavior for such failures changes.
+- New public surface added in this release: ./shell subpath export
+  (LocalShellExecutor, ShellExecOptions, ShellExecResult, ShellExecutor),
+  StructuredOutputValidationError, EgressPolicyError, EgressPolicy, and
+  egressPolicy/shellExecutor config fields.
+
+## 1.15.0 - 2026-08-09
+
+### Added
+
+- Durable approval gates can suspend plan, round, task-dispatch, and tool-call
+  decisions, persist content-bound pending requests and first-wins reviewer
+  decisions in a checkpoint `MemoryStore`, and resume only the approved plan,
+  task, or validated tool invocation. Missing state, stale hashes, schema drift,
+  and tampering fail closed, while derived execution receipts carry the review
+  evidence without making telemetry the authoritative record. New checkpoint
+  writes use schema version 4 to preserve approval continuation state.
+- Checkpoint recovery preserves in-flight built-in runner messages, turn and
+  token accounting, pending tool calls, and independently committed tool
+  results. Restore replays committed results without re-executing their tools,
+  reruns only missing calls, and exposes the stable model-issued `toolCallId`
+  to tools and per-call gates for external idempotency.
+- `Agent.run()`, `Agent.stream()`, and `OpenMultiAgent.runAgent()` accept
+  complete structured message histories. Persistent `Agent.prompt()`
+  conversations can accept one structured user turn, including image input,
+  with runtime validation, defensive copies, and full-message access in
+  `beforeRun`.
+- Rich tool results separate application-owned `ToolResult.data` from validated,
+  model-visible text, image, and file `modelOutput`. Built-in adapters and MCP
+  map supported content explicitly, while runner context, checkpoints,
+  recovery, progress, evaluation, and privacy-safe trace summaries preserve the
+  richer result.
+- `AgentConfig.history` restores persisted conversation messages into a new
+  `Agent` so subsequent `prompt()` calls can continue an earlier conversation.
+
+### Compatibility
+
+- Existing string inputs, string/error tool results, and compression markers
+  keep their previous behavior. Structured input and rich tool output are
+  additive; adapter- and model-specific media limits still apply.
+- Checkpoint readers remain compatible with version 1, version 2, and version 3
+  snapshots. OMA cannot atomically commit an arbitrary external side effect
+  together with its checkpoint write, so consequential integrations still need
+  external idempotency for that crash window.
+- `runTeam()` and `runTasks()` remain text-only. Process and ACP backends remain
+  task-grained and reject structured input rather than silently dropping it.
+- Existing approval callbacks can continue returning allow or deny. Suspension
+  is additive; task gates with live verification wiring, standalone
+  `runAgent()`, the simple-goal shortcut, process backends, and ACP backends do
+  not expose every resumable private tool-loop path.
+- `@open-multi-agent/otel@0.1.1` is not republished. Its
+  `@open-multi-agent/core@^1.11.0` dependency remains compatible with core
+  `1.15.0`.
+
+## 1.14.0 - 2026-08-01
+
+### Breaking changes
+
+This release shipped as a minor version, so a caller on a `^1.x` range receives
+it without an explicit upgrade step. npm reports an `engines` mismatch as an
+`EBADENGINE` warning rather than an install failure, so a Node 18 project
+installs 1.14.0 successfully and then fails at run time.
+
+- **Node.js 20 or newer is now required.** The `engines` floor moved from 18 to
+  20 across `@open-multi-agent/core`, `@open-multi-agent/otel`, and
+  `create-oma-app`. Node 18 reached end of life on 2025-04-30.
+- **The bundled `openai` dependency moved from v4 to v6.** A project that also
+  depends on `openai` directly resolves a nested second copy until it moves to
+  v6 as well.
+- **Plans that were previously accepted can now fail at validation time.**
+  Invalid task dependency graphs, unsatisfiable task requirements, and invalid
+  coordinator plans are rejected before execution instead of running partially.
+  Each of these surfaces a defect that was previously silent, so correct graphs
+  and rosters are unaffected. The individual entries are under Changed and
+  Fixed below.
+
+### Added
+
+- Adaptive plan recovery lets a run revise the not-yet-executed part of its task
+  graph. Opt in with `recovery.mode: 'repairable'`, then supply a `Replanner` or
+  an `onTaskOutcome` callback that proposes an append-only `PlanPatch`. Patches
+  are validated for agent eligibility, limits, task states, references, and the
+  resulting DAG, gated through the optional `onPlanPatch` approval, and applied
+  atomically at a task-outcome barrier before downstream dispatch or failure
+  cascade. Revision history is exposed in results, progress events, and
+  observability spans.
+- Hybrid semantic execution routing supplements the deterministic router with a
+  single structured semantic assessment. Opt in with
+  `executionRouting: { strategy: 'hybrid' }`. The release adds a
+  provider-neutral `TaskProfiler` interface, a built-in `LLMTaskProfiler`, a
+  strict task-profile schema, typed routing failures with timeout and fallback
+  metadata, and semantic-routing observability.
+- DeepSeek V4 Flash reasoning controls. `AgentConfig.thinking.enabled` now maps
+  to DeepSeek's native `thinking.type`, and `thinking.effort` accepts the
+  DeepSeek-only value `'max'` without forwarding it to OpenAI, Azure OpenAI, or
+  GitHub Copilot.
+- `validateTaskRequirements` is exported for callers that want to check task
+  requirements against a roster before dispatch.
+- New typed errors are exported for the failure modes above:
+  `InvalidTaskRequirementsError`, `UnsupportedToolCallError`,
+  `RoutingDeclarationRequiredError`, `RoutingProfilerFailedError`, and
+  `RoutingTimeoutError`.
+
+### Changed
+
+- On the OpenAI v6 SDK, user aborts are now classified as cancellation rather
+  than as a retryable failure, and unsupported custom tool calls are rejected
+  explicitly instead of being passed through.
+- Task requirements are enforced as global hard constraints. A task whose
+  requirements no agent satisfies is now rejected rather than assigned to an
+  ineligible agent.
+
+### Fixed
+
+- Invalid task dependency graphs are rejected up front instead of executing a
+  partially valid plan.
+- The coordinator fails closed on an invalid plan rather than continuing with a
+  plan it could not validate.
+
+### Compatibility
+
+- Automatic `runTeam()` routing remains deterministic. Hybrid semantic routing
+  is opt-in through `executionRouting.strategy` and does not change existing
+  runs.
+- Adaptive plan recovery is opt-in. Task graphs stay fixed unless
+  `recovery.mode` selects `'repairable'`.
+- Adaptive recovery adds a version 2 task-queue snapshot carrying plan-revision
+  history. `TaskQueue.fromSnapshot()` still accepts version 1 snapshots, so
+  checkpoints written by earlier releases remain restorable.
+- Every public export from 1.13.0 is still exported. New result and
+  configuration fields remain optional, so existing callers and serialized
+  results continue to type-check.
+
+## 1.13.0 - 2026-07-24
+
+### Added
+
+- Execution routing can now be selected explicitly with `mode`, customized
+  through `ExecutionRouter`, or left to the built-in `DeterministicRouter`.
+  Every `runTeam()` topology choice exposes a structured routing decision and
+  trace linkage.
+- Structured governance declarations support required or preferred roles,
+  ordered review paths, budget-aware degradation, post-execution conclusions,
+  and privacy-preserving execution receipts.
+- Consequential tools can be declared through `ToolDefinition.consequential`.
+  Undeclared runs expose a machine-readable disclosure flag and can opt into
+  confirmation through the existing `onToolCall` gate.
+- Model routes can declare ordered fallback routes for retryable worker
+  provider failures.
+- Agents and tasks can declare structured capabilities and hard requirements.
+  The scheduler adds `capability-match` and weighted `composite` strategies,
+  structured warnings, and optional strict assignee validation.
+- `TeamRunResult.taskResults` preserves unmerged results by task ID. Explicit
+  tasks can choose raw, structured, or combined dependency payloads and attach
+  bounded role/provenance metadata.
+- `OrchestratorConfig.onTaskDispatch(task)` provides a native per-task pipeline
+  approval gate. It is mutually exclusive with `onApproval`.
+- The offline Run Viewer surfaces execution-routing decisions, and Evaluation
+  includes a language-neutral routing-stability gate.
+
+### Changed
+
+- Task DAG execution is event-driven by default. A downstream task now starts
+  when its dependencies are satisfied instead of waiting for unrelated tasks
+  from the same ready set.
+- Progress events from independent DAG branches may interleave instead of
+  arriving in round-sized groups. Consumers should correlate events by task ID
+  and use task status plus `dependsOn` rather than adjacency to derive state.
+- Unassigned tasks are scheduled one ready task at a time against the current
+  DAG snapshot. Dependency-aware ready-set ordering and existing strategy
+  eligibility/fallback contracts are preserved.
+- Abort, budget exhaustion, and task-dispatch approval rejection now stop new
+  dispatches, drain in-flight work, and then skip remaining tasks.
+- Automatic execution routing recognizes structured Chinese, Japanese, and
+  Korean goals and uses script-aware information length instead of relying on
+  English-only word patterns and raw character count.
+
+### Fixed
+
+- CJK keyword extraction and zero-score fallback no longer select an
+  ineligible agent or lose a valid keyword-based match.
+- Governed `planOnly` runs validate and return the declared role DAG without
+  executing agents.
+- Explicit execution modes, governance floors, and per-run token/cost ceilings
+  now resolve through a documented precedence order and disclose overrides or
+  budget degradation instead of silently changing topology.
+
+### Compatibility
+
+- Configuring the existing `onApproval` callback automatically retains legacy
+  round scheduling and callback semantics. A separate
+  `legacyBatchScheduling` flag is not provided because `onApproval` already
+  selects that compatibility path.
+- Custom UIs that depend on round-grouped progress timing can temporarily
+  configure `onApproval: async () => true`; event-driven consumers should
+  migrate to task-ID correlation.
+- Raw dependency output remains the default. Structured dependency handoff,
+  governance declarations, consequential confirmation, and custom execution
+  routing are opt-in.
+- New result fields remain optional in public TypeScript interfaces so older
+  serialized results and caller-authored fixtures continue to type-check.
+- `@open-multi-agent/otel@0.1.0` is not republished; its
+  `@open-multi-agent/core@^1.11.0` dependency remains compatible with core
+  `1.13.0`.
+
+## 1.12.1 - 2026-07-20
+
+### Evaluation V1 (#403–#409)
+
+- New `@open-multi-agent/core/eval` and `/eval/file` entry points.
+- Define reusable `Scorer` implementations and versioned `EvalSet` fixtures.
+- Run deterministic offline evaluations with reports, stores, gates, CLI commands, and reference scorers.
+- Sample and score production runs online without changing the business result.
+
+### Offline Run Viewer (#394, #411)
+
+- Open saved results and traces locally without a running service.
+- Inspect task-level model, provider, token, and cost information through the viewer and CLI.
+
+### Per-run metadata (#396)
+
+- Top-level run APIs accept bounded metadata that is propagated into results, traces, and checkpoint restores.
+
+### Zero-key onboarding (#414)
+
+- `create-oma-app@0.5.0` can install and run a deterministic Demo without API keys or model requests.
+- Demo output clearly discloses simulated model responses and produces Markdown, JSON, and HTML reports.
+- New `--no-install` and `--no-run` flags support controlled scaffolding workflows.
+
+### Examples catalog (#412)
+
+- Added a machine-readable examples catalog, schema, and coverage validation.
+
+### Fixes (#390, #417)
+
+- The process backend cleans up descendant processes after the parent exits.
+- `v1.12.1` fixes installed `oma` binaries so the CLI launches correctly through npm-created symlinks. This was found during the `v1.12.0` post-publish verification.
+
+### Compatibility
+
+- Existing run modes remain compatible.
+- Evaluation is disabled by default, and online evaluation does not change the business result.
+- Scorer failures are recorded as `scorer_error` and excluded from score aggregates instead of being counted as zero.
+- `@open-multi-agent/otel@0.1.0` is not republished and remains compatible with core `1.12.1`.
+- #397, #400, #401, and #402 are behavior-preserving internal extractions, not new public APIs.
+
+### Install
+
+```bash
+npm install @open-multi-agent/core@1.12.1
+npm create oma-app@latest my-oma
+```
+
+## 1.11.0 - 2026-07-17
+
+### Features
+
+- **Observability v2: trace spans and run identity** (#371, #373 by @JackChen-me). Every run now carries a stable `runId`, `attempt`, `traceId`, and `rootSpanId`, and emits the new TraceRecord v2 schema: a proper span tree covering run, coordinator, task, agent, LLM, tool, retry, delegation, consensus, and checkpoint, with DAG, synthesis, and restore relationships expressed as links. The existing seven-field `onTrace` callback keeps working unchanged. See [docs/observability.md](https://github.com/open-multi-agent/open-multi-agent/blob/main/docs/observability.md).
+
+- **Observability v2: sink and exporter lifecycle** (#374 by @JackChen-me). The new `@open-multi-agent/core/observability` subpath ships the public `TraceSink` / `TraceExporter` contract plus `BatchingTraceSink` (bounded queue, batched export, backoff retries, priority-aware drop), `CompositeSink`, `FilteringSink`, `SensitiveDataProcessor`, and `LegacyCallbackTraceSink`. Tracing stays metadata-only by default: prompts, completions, tool payloads, credentials, and reasoning content are never captured.
+
+- **Observability v2: trace stores** (#375, #384 by @JackChen-me). A storage-independent `TraceStore` contract (append, get, query, delete, retention) with two references: the zero-dependency `InMemoryTraceStore`, and `FileTraceStore` behind `@open-multi-agent/core/observability/file`, an append-only NDJSON store with crash-safe compaction and explicit flush, close, and diagnostics. FileTraceStore targets local development, tests, CLIs, and modest single-process services.
+
+- **New package: @open-multi-agent/otel 0.1.0** (#376, #385 by @JackChen-me). A separately installable adapter that maps TraceRecord v2 spans onto OpenTelemetry. Its only peer dependency is `@opentelemetry/api ^1.9.0` (npm 7+ installs it automatically), it never initializes or replaces the global `TracerProvider`, and it versions independently of core. It requires core 1.11.0; core 1.10.0 does not contain the v2 APIs. Core itself remains installable and runnable without any OpenTelemetry packages. See [docs/observability-migration.md](https://github.com/open-multi-agent/open-multi-agent/blob/main/docs/observability-migration.md).
+
+- **Per-call tool gate** (#377 by @scarab-systems). Optional `onToolCall` on `AgentConfig` / `OrchestratorConfig` runs after Zod validation and before execution, returning allow or deny per call. A deny becomes a normal error `ToolResult` (never a throw), and a throwing or invalid gate fails closed. Documented with a runnable risk-gated bash example in #383. See [docs/tool-configuration.md](https://github.com/open-multi-agent/open-multi-agent/blob/main/docs/tool-configuration.md).
+
+- **Generic process backend** (#378 by @scarab-systems). The new `@open-multi-agent/core/process` subpath runs a local command as an agent: protocol-neutral, with stdin or argument prompt delivery, cancellation, and redacted stderr on failure. It complements the existing protocol-aware ACP backend. See [docs/external-agents.md](https://github.com/open-multi-agent/open-multi-agent/blob/main/docs/external-agents.md).
+
+- **Bash command risk classifier** (#382 by @JackChen-me). `classifyBashCommand` behind the `@open-multi-agent/core/classifiers` subpath returns a `safe` / `review` / `high` level with a reason, splitting compound commands and taking the highest risk. It is a dependency-free heuristic meant to pair with the tool gate, explicitly not a security boundary.
+
+- **create-oma-app 0.4.0: production starters** (#370 by @JackChen-me). `npm create oma-app@latest` now offers production-ready `pr-review` and `security` starters alongside `demo`, with cloud or Ollama provider selection. Starters generate Markdown, JSON, and OMA DAG dashboard reports, analyze GitHub strictly read-only, and redact secrets before model analysis.
+
+- **Adaptive customer support recipe** (#386 by @JackChen-me). A new cookbook example where `runTeam` engages only the specialists relevant to each ticket instead of the full roster.
+
+### Fixes
+
+- **Cancelled and timed-out runs no longer report success** (#371 by @JackChen-me). Cancellation and whole-run timeout paths could previously surface as successful results; they now report their real outcome through the normalized `status`.
+
+### Compatibility notes
+
+- `onTrace` remains fully supported and is not deprecated. `LegacyCallbackTraceSink` can now be configured directly as a sink, preserving the seven legacy event shapes without also wiring `onTrace`.
+- Results now always include `identity` and `status`. The new fields stay optional in TypeScript for this release, and `success` is still present, derived from `status.code === 'ok'`.
+- Dependency ownership is now expressed per package: OpenTelemetry packages belong exclusively to `@open-multi-agent/otel`, and core must stay importable without them.
+
+### Install
+
+```
+npm install @open-multi-agent/core@1.11.0
+npm install @open-multi-agent/otel@0.1.0   # optional OpenTelemetry adapter, requires core 1.11.0
+```
+
+New project: `npm create oma-app@latest` (scaffold updated to create-oma-app@0.4.0, which pins core 1.11.0).
+
+Thanks to @scarab-systems and @JackChen-me.
+
+## 1.10.0 - 2026-07-11
+
+### Features
+
+- **External coding agents over ACP** (#360 by @JackChen-me). OMA can now orchestrate an external coding agent over the Agent Client Protocol as a first-class team member, alongside LLM agents in the same task DAG. Declare an agent with `backend: { kind: 'acp', ... }` and it runs a local coding CLI (for example Claude Code via the official `@agentclientprotocol/claude-agent-acp` adapter) instead of an LLM, sharing the same shared memory, cascade-on-failure, and token budget as any other agent. See [docs/external-agents.md](https://github.com/open-multi-agent/open-multi-agent/blob/main/docs/external-agents.md).
+
+- **Orchestrator cost budget** (#358 by @LambIessz). New `maxCostBudget` and `estimateCost` on orchestrator config let you set a user-defined spend cap. The estimator receives the effective model, provider, phase, and task id so you can price per model, and the cap is enforced across `runAgent`, `runTasks`, `runTeam`, consensus, and synthesis, mirroring the existing token-budget boundaries.
+
+- **Per-agent scoped tool credentials** (#362 by @JackChen-me). New `AgentConfig.credentials` is a per-agent secret bag threaded into `ToolUseContext.credentials`. Tool code reads `context.credentials?.SEARCH_API_KEY` instead of closing a single shared secret over every tool, so each agent holds only the credentials it was assigned. A compromised or misbehaving subagent no longer inherits the coordinator's full access.
+
+- **Secret redaction on the persistence path** (#359 by @JackChen-me). Redaction previously stopped at the observability layer, so a secret an agent emitted into its answer was scrubbed in traces but written in the clear to shared memory and any on-disk checkpoint. The new `RedactingStore`, a `MemoryStore` decorator, redacts values at the single choke point every shared-memory and checkpoint write passes through, and is structure-aware for JSON so checkpoint snapshots stay valid with only secrets masked. Closes #339.
+
+- **MessageBus persisted in checkpoints** (#363 by @LambIessz). Checkpoint and restore now carry MessageBus state (messages and per-agent read position), so a resumed run keeps its inter-agent message history. Live callback subscribers stay process-local and are not serialized. Closes #343.
+
+- **Trace span parent linkage** (#354 by @tlysanhuo). Every trace event now carries a `spanId` and optional `parentId`, with stable agent span ids so LLM and tool spans point to their owning agent span, worker agents link under their task span, and `plan_ready` links under the coordinator decomposition. A team run is now reconstructable as a proper span tree. Closes #340.
+
+### Fixes
+
+- **Windows: kill the full process tree on bash timeout** (#357 by @Bobuyoucrypto). A timed-out `bash` command on Windows now kills its full process tree with `taskkill /T /F` and returns promptly, instead of leaving background children alive and hanging until they exit on their own. Exit codes 124 (timeout) and 130 (abort) are reported authoritatively, and the suite now passes on Windows.
+
+### Install
+
+```
+npm install @open-multi-agent/core@1.10.0
+```
+
+New project: `npm create oma-app@latest` (scaffold updated to create-oma-app@0.3.1, which pins core 1.10.0).
+
+Thanks to @LambIessz, @tlysanhuo, @Bobuyoucrypto, and @JackChen-me.
+
+## 1.9.0 - 2026-07-03
+
+### Features
+
+- **Durable memory: `FileStore`** (#347 by @JackChen-me). A zero-dependency, filesystem-backed `MemoryStore`, so checkpoint/resume survives a process restart out of the box. Writes are atomic (temp file, fsync, rename) and reads come from an in-memory mirror; a corrupt state file fails loud instead of silently. Until now the only bundled store was `InMemoryStore`, so durability meant writing your own.
+- **Error-aware task retry** (#346 by @JackChen-me). Retry (opt-in via `maxRetries > 0`) now classifies failures: `isRetryableError()` skips provably-terminal errors (most 4xx, token-budget, aborted calls) instead of burning attempts, while 429, 5xx, network blips, and per-call timeouts still retry. Adds equal jitter and honors abort signals, on both streaming and non-streaming paths.
+- **Per-call LLM timeout** (#344 by @JackChen-me). New opt-in `AgentConfig.callTimeoutMs` (and on `CoordinatorConfig`) bounds a single `adapter.chat()` call, so one stalled request no longer hangs the whole run. Uniform across every adapter and surfaced as `LLMCallTimeoutError`, distinct from a deliberate abort or a real API error. Unset preserves current behavior exactly.
+- **Run-level metrics on `TeamRunResult`** (#345 by @lesbass). `TeamRunResult` now carries a `metrics` rollup (total tokens, retries, error/failure/completed counts, and task-latency aggregates) computed from per-task data, and the dashboard renders a matching summary bar.
+- **Vercel AI SDK 7 support** (#348 by @JackChen-me). The optional `ai` peer range now spans `^5 || ^6 || ^7`, so you can use the AI SDK bridge on the latest release without peer-dependency warnings. No adapter code changes. The AI SDK 7 bridge needs Node >= 22 (core stays >= 18).
+
+### Docs
+
+- Plan preview and replay guide, surfaced from both READMEs (#349 by @JackChen-me).
+
+### Install
+
+```
+npm install @open-multi-agent/core@1.9.0
+```
+
+New project: `npm create oma-app@latest`
+
+Thanks to @lesbass and @JackChen-me.
+
+## 1.8.1 - 2026-06-27
+
+Patch release with two install/runtime fixes.
+
+### Fixes
+
+- **`defaultModel` now reaches every agent, not just the coordinator.** Previously `OrchestratorConfig.defaultModel` only applied to the coordinator pass. Workers, `runAgent`, delegated, and consensus agents never inherited it, so it was effectively dead for executing agents. They now inherit `defaultModel` the same way they already inherited `defaultProvider`, `defaultBaseURL`, and `defaultApiKey`. `AgentConfig.model` becomes optional in an orchestrated run; a standalone `new Agent()` still requires an explicit model and throws a clear error if it is missing. (#323)
+- **Vercel AI SDK v6 is now supported.** The optional `ai` peer range widened from `^5.0.0` to `^5.0.0 || ^6.0.0`, so installs that pair the framework with AI SDK v6 (for example via `@ai-sdk/react@3`, which pulls `ai@6`) no longer fail with ERESOLVE. The adapter works against both majors. (#324)
+
+### Docs
+
+README and examples cleanups: clearer out-of-the-box vs peer-install provider guidance, a one-click Vercel deploy starter link, corrected example run paths after the reorg, and Ecosystem additions. (#320–#322, #325–#331)
+
+---
+
+Also republishes `create-oma-app@0.2.1` (template pin bumped to core `1.8.1`).
+
+## 1.8.0 - 2026-06-19
+
+### Features
+- **Checkpoint and resume** (#294 by @mvanhorn, #314 by @JackChen-me). A long run can now survive a crash or restart. Persist progress to any `MemoryStore` with `checkpoint: true` on `runTeam` / `runTasks` / `runFromPlan`, then resume with `orchestrator.restore(...)`. On resume, `runTeam` re-runs coordinator synthesis so you still get a final answer, and checkpointing into the team's own shared-memory store no longer re-serializes the whole store per task.
+- **Consensus verification reaches runTeam** (#301 by @nuthalapativarun). The per-task judge loop from 1.7.0 now applies to coordinator-generated tasks. Pass the judges with `RunTeamOptions.verifyJudges`, and the coordinator opts a task in with `verify: true` or a partial config.
+- **Native reasoning round-trip on Bedrock** (#302 by @nuthalapativarun). Extended-thinking blocks round-trip through Bedrock's signature protocol with full fidelity, moving `echoesReasoning` from `never` to `own-issued`.
+
+### Fixes
+- Dashboard: the run details panel is back to a right-hand sidebar on desktop instead of stacking under the canvas (#308 by @JackChen-me).
+
+### Onboarding and examples
+- `npm create oma-app` scaffolds a runnable multi-agent demo in one command (#305, #306 by @JackChen-me).
+- The full-app examples run end to end on a single DeepSeek key (#311 by @JackChen-me).
+- New consensus pattern example (#297 by @nuthalapativarun).
+
+### Install
+npm install @open-multi-agent/core@1.8.0
+
+New project: npm create oma-app@latest
+
+Thanks to @mvanhorn, @nuthalapativarun, and @JackChen-me.
+
+## 1.7.0 - 2026-06-15
+
+### ⚠️ Breaking: built-in tools are now opt-in / default-deny (#289 by @JackChen-me)
+
+A no-tools agent used to receive every built-in implicitly, including an
+unsandboxed `bash`. Tool output flows back to the model, so under prompt
+injection that was a remotely triggerable exec + exfiltration path. Built-in
+tools (`bash`, `file_*`, `grep`, `glob`, `delegate_to_agent`) now need a
+positive grant: with neither `tools` nor `toolPreset` set, an agent resolves to
+zero.
+
+Migrating:
+- One-line restore of the old allow-all: `defaultToolPreset: 'full'` on `OrchestratorConfig`.
+- Or grant per agent via `tools` / `toolPreset`.
+- Custom tools (`customTools` / `addTool`) are unaffected: registration is the grant, and `disallowedTools` is still honored.
+
+### Features
+- **Consensus / adversarial verification** (#280 by @CodingBangboo). `runConsensus()` runs proposers against judges, plus an optional per-task `verify` hook that puts a task's own result through the same judge loop.
+- **Deterministic model routing** (#286 by @cat0825). Opt-in `modelRouting` sends different orchestration calls (coordinator, synthesis, workers, delegated) to different models by match rules, without mutating your team config. Also fixes routing being bypassed on pooled agents.
+- **MiniMax-M3 is the new default** (#292 by @octo-patch). Up to a 1M-token context (512K guaranteed) with image input. M2.7 and `MiniMax-M2.7-highspeed` stay available if you pin them explicitly.
+
+### Docs
+- Model routing guide: `docs/model-routing.md`, linked from both READMEs (#293 by @JackChen-me).
+- TencentDB-Agent-Memory integration cookbook under `examples/` (#295 by @JackChen-me).
+- LiteLLM added to the OpenAI-compatible providers table (#283 by @RheagalFire).
+
+### Install
+npm install @open-multi-agent/core@1.7.0
+
+Thanks to @CodingBangboo, @cat0825, @octo-patch, and @RheagalFire. Extra thanks to @CodingBangboo, who landed the consensus primitive (#280) and has been a steady reviewer this cycle.
+
+## 1.6.0 - 2026-06-06
+
+### Features
+- Replay persisted team plans, so a previously decomposed plan can be re-run without a new coordinator pass (#285 by @cat0825)
+- Add a Tencent Hunyuan provider adapter (#281 by @KaitlynFeng)
+- Add a robust regex fallback for malformed single-string JSON tool calls from local models (#269 by @apollo-mg)
+
+### Fixes
+- Validate message content at every adapter entry, surfacing a clear InvalidMessageError instead of a deep `content.some is not a function` crash (#288 by @JackChen-me, implementing the fail-fast approach @apollo-mg diagnosed in #268)
+- Preserve memoryScope and retry config when a plan is replayed (#287 by @JackChen-me)
+- Support structured shared-memory handoff between agents (#284 by @cat0825)
+
+### Internal
+- Extract a shared repairToolArgs helper across the OpenAI-compatible adapters (#282 by @JackChen-me)
+- Add unit tests for the error types (#290 by @Oxygen56)
+
+### Docs
+- Move the Ecosystem section above Examples in the README (#277 by @JackChen-me)
+
+### Install
+npm install @open-multi-agent/core@1.6.0
+
+Thanks to @KaitlynFeng, @apollo-mg, @cat0825, and @Oxygen56.
+
+## 1.5.0 - 2026-05-30
+
+### Features
+
+- **Per-agent filesystem sandbox** (#264 by @JackChen-me). `file_read/file_write/file_edit/grep/glob`
+  now resolve every path, symlinks included, inside each agent's `cwd`, defaulting to
+  `<cwd>/.agent-workspace`. `bash` stays unsandboxed. Behavior change below.
+- **Cross-provider reasoning text fallback** (#260 by @MyPrototypeWhat). `preserveReasoningAsText`
+  carries reasoning across providers that can't echo native reasoning blocks, as inline
+  `<thinking>` text instead of dropping it. Phase 2 of #223.
+- **MiMo provider** (#265 by @kidoom).
+- **Doubao (Volcengine) provider shortcut** (#261 by @kidoom, #236 by @janelawrence). Target
+  Doubao models without custom `baseURL` wiring.
+- **DeepSeek V4 default model names** (#250 by @JackChen-me). Behavior change below.
+
+### Fixes
+
+- **Secrets redacted from traces, bash output, and dashboard payloads** (#263 by @JackChen-me).
+  API keys and tokens no longer leak into observability surfaces.
+- **MCP: dedupe normalized tool names, clean up client/transport on connect failure**
+  (#256 by @JackChen-me).
+- **Orchestrator honors `abortSignal` before synthesis and rejects ambiguous task deps**
+  (#255 by @JackChen-me).
+- **Loop detector replays history and warns on text-only loops** (#254 by @JackChen-me).
+- **DeepSeek echoes `reasoning_content` on V4 tool-calling** (#251 by @JackChen-me).
+
+### Behavior changes
+
+- **Filesystem tools sandbox to `<cwd>/.agent-workspace` by default** (#264). Agents that read or
+  wrote outside `process.cwd()`, or used relative paths, now get a sandbox error. Set
+  `OrchestratorConfig.defaultCwd` (or `AgentConfig.cwd`) to your root, `process.cwd()` for the old
+  wide default, or `null` to disable. `bash` is not sandboxed.
+- **DeepSeek CLI default is now `deepseek-v4-flash`** (#250). Affects the `oma` CLI run without
+  `--model`; library users are unaffected (no hardcoded default in the adapter). `deepseek-chat`
+  and `deepseek-reasoner` keep routing until DeepSeek retires them on 2026-07-24.
+
+### Package metadata
+
+- **`docs/` no longer ships in the npm tarball.** README links now point to the GitHub copy, so
+  they always track the latest version. If you read docs from
+  `node_modules/@open-multi-agent/core/docs/` (uncommon), switch to the GitHub URLs.
+
+### Examples and docs
+
+- Provider examples: Moonshot (#259), Qwen (#257), and an index of existing ones (#258), all by
+  @goodneamtakenbydogs.
+- Bilig WorkPaper MCP integration example (#247 by @gregkonush).
+- README restructured with built-in capabilities surfaced and zh synced (#273 by @JackChen-me),
+  CLAUDE.md slimmed to a code map (#274 by @JackChen-me), integrations governance README replacing
+  the stale DECISIONS.md (#248 by @JackChen-me).
+- Tests and CI: DeepSeek tool-calling via `chat()` and `stream()` (#252 by @btroops), OpenAI
+  adapter fallback assertions (#253), CI on `npm ci` (#262), and a CI check asserting the npm
+  tarball ships only `dist/` plus metadata.
+
+### Install
+
+```
+npm install @open-multi-agent/core@1.5.0
+```
+
+Thanks to @kidoom, @janelawrence, @MyPrototypeWhat, @goodneamtakenbydogs, @btroops, and @gregkonush.
+
+## 1.4.2 - 2026-05-24
+
+Drop-in safe patch: three opt-in additions and three new examples. All new APIs default to off.
+
+### New (opt-in)
+
+- **`RunTeamOptions.revealCoordinator`** (#245 by @JackChen-me). When `true`, prepends a team-context block (goal, full roster, this worker's assignee identity) to every worker prompt under `runTeam`. Default `false` keeps existing prompts byte-identical. `runTasks` and the short-circuit single-agent path ignore it. Closes #244.
+- **`enableReasoningTextReplay`** (#234 by @matthewYang08). Opt-in replay of framework `reasoning` blocks as inline `<thinking>` text on OpenAI-family requests, capped by `maxReasoningReplayChars` (default 1200). Also closes a latent 400 against OpenAI when a reasoning-only assistant message emitted `{content: null}` with no `tool_calls`. Refs #223.
+- **`ReasoningBlock.provenance` + `LLMAdapter.capabilities`** (#243 by @MyPrototypeWhat). Phase 1 of #223: additive IR fields, per-adapter `echoesReasoning: 'never' | 'own-issued'` declarations, and a shared `reasoningBlockToInlineText` helper. No behavior change yet; Phase 2 wires `capabilities` into the outbound fallback.
+
+### Examples
+
+- Doubao (ByteDance) provider example via Volcengine Ark (#232 by @nuthalapativarun).
+- Zhipu GLM provider example (#231 by @nuthalapativarun).
+- Narrative puzzle hint arbitration cookbook: 5-agent multi-source conflict resolution with external safety veto (#235 by @suans4746-del). Closes #212.
+
+### Documentation
+
+- `compressToolResults` and `maxToolOutputChars` documented in the context management guide (#233 by @nuthalapativarun).
+
+### Install
+
+`npm install @open-multi-agent/core@1.4.2`
+
+Thanks to @MyPrototypeWhat, @nuthalapativarun, @matthewYang08, and @suans4746-del.
+
+**Full Changelog:** https://github.com/open-multi-agent/open-multi-agent/compare/v1.4.1...v1.4.2
+
+## 1.4.1 - 2026-05-18
+
+Patch release: two bug fixes for OpenAI-family adapters and the runner, plus Vercel AI SDK as an optional adapter. The previous npm package (`@jackchen_me/open-multi-agent`) is now formally deprecated.
+
+### Bug fixes
+- **OpenAI-family adapters: guard `choices[0]` with optional chaining** (#220). Prevents crashes when providers return empty `choices` arrays. Thanks @dvirarad.
+- **Runner: defer `maxTokenBudget` break until after `tool_result` is appended** (#221). Fixes orphaned `tool_use` blocks when the token budget is hit mid-turn. Thanks @CodingBangboo.
+
+### New (optional)
+- **Vercel AI SDK adapter** via the dedicated `@open-multi-agent/core/ai-sdk` subpath (#229). Bridges `LLMAdapter` to AI SDK's `generateText` / `streamText`. Optional peer dep `ai`; main import is unaffected if you don't use it. Thanks @ibrahimkzmv.
+
+### Documentation
+- MiniMax provider community offer and setup guide (#219).
+- Label hero GIF as post-run replay (#222).
+
+### Deprecation
+- The previous npm package, `@jackchen_me/open-multi-agent`, is now formally deprecated. Existing installs continue to work; new installs should use `npm install @open-multi-agent/core`. The npm CLI shows a deprecation message automatically.
+
+**Full Changelog:** https://github.com/open-multi-agent/open-multi-agent/compare/v1.4.0...v1.4.1
+
+## 1.4.0 - 2026-05-09
+
+### Highlights
+
+#### Official org package
+
+Open Multi-Agent now has an official organization package:
+
+```bash
+npm install @open-multi-agent/core
+```
+
+New projects should use `@open-multi-agent/core`.
+
+#### Plan-only orchestration
+
+Adds PlanOnly mode so teams can inspect the coordinator's task DAG before running agent work. (#203 by @CodingBangboo)
+
+#### LLM adapter improvements
+
+- Preserve reasoning blocks across Anthropic and Gemini turns. (#205 by @MyPrototypeWhat)
+- Forward `reasoning_effort` and backfill sampling-parameter parity across OpenAI-compatible, Copilot, and Azure paths. (#209 by @MyPrototypeWhat)
+- Add a Mistral provider example and README entry. (#206 by @mvanhorn)
+
+#### Shared memory TTL
+
+SharedMemory entries can now expire by turn count. (#213 by @MyPrototypeWhat)
+
+### Fixes
+
+- Keep text-tool extraction depth non-negative when a stray closing brace appears. (#217 by @voidborne-d)
+- Fix truncation behavior and tighten coordinator dependency guidance. (#215 by @CodingBangboo)
+
+### Examples and Docs
+
+- Add paper replication triage cookbook example. (#202 by @DaiMao-UT)
+- Add rare disease information triage example. (#211 by @oooooowoooooo)
+- Refresh README, hero animation, badges, docs, and repository links for the new GitHub organization. (#214 and #218 by @JackChen-me)
+
+### Compatibility
+
+No intentional runtime API breaks were introduced. The package identity changed to `@open-multi-agent/core`.
+
+The previous package path, `@jackchen_me/open-multi-agent`, remains supported during the migration window and is also published at `1.4.0`.
+
+### Install
+
+```bash
+npm install @open-multi-agent/core@1.4.0
+```
+
+Legacy path during the migration window:
+
+```bash
+npm install @jackchen_me/open-multi-agent@1.4.0
+```
+
+## 1.3.1 - 2026-05-02
+
+### Features
+
+#### Streaming reasoning events
+`StreamEvent` now supports a `reasoning` type that carries the model's thinking tokens in real time. `ReasoningBlock` is also added to the `ContentBlock` union for non-streaming paths. Supported on Anthropic and OpenAI providers. (#174 by @SiMinus)
+
+#### `onAgentStream` and `onPlanReady` hooks
+Two new orchestrator hooks (runTeam only): `onAgentStream` delivers real-time per-token streaming events during agent runs, and `onPlanReady` fires after the coordinator decomposes the goal into a task DAG -- return `false` to abort before any agent work starts. (#182, #181 by @tizerluo; #184, #183 by @JackChen-me)
+
+#### Agent Observation Pipeline: new trace events
+`plan_ready` and `agent_stream` trace events join the trace pipeline, enabling downstream observers to react to plan generation and streaming agent output. (#188 by @ibrahimkzmv)
+
+#### AWS Bedrock adapter
+New LLM adapter for Amazon Bedrock, supporting the full adapter contract (chat + stream). (#194 by @CodingBangboo)
+
+#### ToolCallTrace includes input/output
+`ToolCallTrace` now carries the tool's input and output payloads, making it useful for debugging and audit without inspecting the raw conversation. (#124 by @MyPrototypeWhat)
+
+### Fixes
+
+- Strip image blocks before summarize compression to avoid ballooning token cost. (#196 by @MyPrototypeWhat)
+- Preserve `tool_use`/`tool_result` pairing during sliding-window truncation, fixing orphaned tool blocks. (#193 by @MyPrototypeWhat)
+- `onAgentStream` path now forwards the full `RunOptions` into the streaming runner so `onTrace`, delegation, and run metadata work during streaming. (#184 by @JackChen-me)
+- `onPlanReady` abort path now reports the real coordinator token cost instead of zero, and catches thrown callbacks. (#183 by @JackChen-me)
+
+### Examples
+
+- Express customer support pipeline: multi-agent triage, routing, and resolution. (#191 by @CodingBangboo)
+- Personalized interview simulator: dynamic question generation with structured output. (#189 by @mmjwxbc)
+- Incident postmortem DAG: reconstruct timeline from logs and deploys. (#187 by @binghuaren96)
+
+### Docs
+
+- README capability tagline, per-area contributor attribution, and a JSDoc fix. (#190, #186, #180 by @JackChen-me)
+
+### Install
+
+```bash
+npm install @jackchen_me/open-multi-agent@1.3.1
+```
+
+Thanks to @SiMinus, @tizerluo, @ibrahimkzmv, @CodingBangboo, @MyPrototypeWhat, @mmjwxbc, and @binghuaren96 for the external contributions.
+
+## 1.3.0 - 2026-04-26
+
+### New capabilities
+
+#### Agent delegation
+Agents in an orchestrated run can now hand a sub-prompt to another agent on the team and receive its final output as a tool result. Opt-in via `registerBuiltInTools(registry, { includeDelegateTool: true })`. Five guards: self-delegation, unknown agent, cycle detection, configurable depth cap (`maxDelegationDepth`, default 3), and pool deadlock. Delegated runs' token usage rolls into the parent's `maxTokenBudget` so sub-agents cannot silently bypass it. (#123 by @JackChen-me)
+
+#### `runTeam` DAG dashboard CLI
+`oma runTeam ... --dashboard` writes a static HTML view of the resolved task graph after a run, including dependencies and per-task status. (#122 by @ibrahimkzmv, follow-up docs in #141 by @JackChen-me)
+
+#### `outputSchema` enforcement and `defineTool` passthrough
+The previously advisory `outputSchema` on `AgentConfig` is now enforced: results are parsed and validated, with one retry on validation failure. `defineTool` schemas pass through to the LLM provider. (#149 by @Xin-Mai)
+
+#### Pluggable shared memory
+`TeamConfig.sharedMemoryStore` accepts any `MemoryStore` implementation (Redis, SQLite, your own). `sharedMemory: true` keeps the existing in-process default. (#157 by @JackChen-me)
+
+#### Advanced LLM sampling
+`top_p`, `top_k`, `repetition_penalty`, `min_p`, and `extraBody` are now first-class on agent and coordinator configs. Payload spread order is fixed so `extraBody` overrides sampling parameters but never transport. (#163 by @apollo-mg)
+
+#### `parallelToolCalls` exposed for OpenAI
+Was previously hardcoded; now configurable per agent. (#173 by @JackChen-me)
+
+#### Two new providers
+- **Azure OpenAI** adapter, closing the long-standing #24. (#143 by @Klarline)
+- **Qiniu** provider for users on Chinese infrastructure. (#154 by @JackChiang233, follow-up README/CLI docs in #165 by @JackChen-me)
+
+### Fixes
+
+- **Context compaction persistence and turn dropping.** `compact` strategy was losing turns and not persisting compressed history. (#161 by @apollo-mg)
+- **OpenAI mixed-content message ordering.** Tool messages must precede user messages in mixed content; previously emitted in the wrong order. (#178 by @voidborne-d)
+- **Provider type widening on configs.** `AgentConfig`, `CoordinatorConfig`, and `OrchestratorConfig` were not using the full `SupportedProvider` union. (#158 by @JackChen-me)
+
+### Behavior changes
+
+`#163` removed two implicit defaults that some users may have relied on:
+
+- `parallel_tool_calls: false` is no longer forced. If you need the old behavior, set `parallelToolCalls: false` explicitly (now exposed via #173).
+- The default `frequency_penalty` override has been removed.
+
+These are behavior changes, not API breaks, but worth checking if you depended on the old defaults.
+
+The same PR also moved the local `<think>` tag parsing out of the agent layer into `tool/text-tool-extractor.ts`. This is internal cleanup with no user-visible impact.
+
+### Examples and cookbook
+
+Nine new examples and a category reorganization (#125 by @JackChen-me):
+
+- Meeting summarizer pattern. (#139 by @mvanhorn, moved into `cookbook/` in #140 by @JackChen-me)
+- Translation / back-translation cookbook. (#145 by @zouhh22333-beep)
+- Competitive monitoring. (#146 by @pei-pei45)
+- Multi-perspective code review, upgraded to structured output and free providers. (#150 by @Kinoo0)
+- Contract review DAG with step-level retry. (#155 by @fault-segment)
+- Research aggregation with schema. (#159 by @Optimisttt)
+- Engram integration: memory store, toolkit, two demos. (#160 by @Agentscreator, Ecosystem section refresh in #151 by @JackChen-me)
+- @agentsonar/oma integration: sidecar from the [agentsonar](https://github.com/agentsonar) team detecting cross-run delegation cycles, repetition, and rate bursts. (e7aecf3 by @JackChen-me)
+- Cost-tiered pipeline comparing flagship vs mixed model tiers. (#164 by @HuXiangyu123)
+- OpenRouter provider example. (#167 by @kenrogers)
+- `local-quantized.ts` showing tuned sampling on vLLM and llama-server. (ff987cf by @JackChen-me)
+
+### Docs and infrastructure
+
+- README refresh: positioning, branding, hero block, integrations, examples section. (#126, #176, #177, #179 by @JackChen-me)
+- `CLAUDE.md` architecture map synced with the current `src/` layout. (#171 by @JackChen-me)
+- CLI dashboard documented and added to the flag table. (#141 by @JackChen-me)
+- Real badges and Codecov integration. (#127, #128, #129, #130 by @JackChen-me)
+- npm registry pinned to `npmjs.org` via repo-level `.npmrc` (#170 by @JackChen-me).
+- Extended LLM adapter coverage for issue #54. (#144 by @jadegold55)
+
+### Install
+
+```bash
+npm install @jackchen_me/open-multi-agent@1.3.0
+```
+
+Thanks to @ibrahimkzmv, @mvanhorn, @Klarline, @jadegold55, @zouhh22333-beep, @Kinoo0, @apollo-mg, @Optimisttt, @Agentscreator, @pei-pei45, @fault-segment, @Xin-Mai, @HuXiangyu123, @JackChiang233, @kenrogers, and @voidborne-d for the external contributions that make this release.
+
+**Full changelog:** https://github.com/JackChen-me/open-multi-agent/compare/v1.2.0...v1.3.0
+
+## 1.2.0 - 2026-04-18
+
+First minor release since 1.1.0. MCP integration, three new LLM providers, context management strategies, a CLI, tool output cost controls, and fixes for abort and error propagation.
+
+### Features
+
+- **MCP integration.** New `connectMCPTools()` wires any MCP server (stdio) directly into agent tool use. `@modelcontextprotocol/sdk` is an optional peer dependency. Runnable example at `examples/16-mcp-github.ts`. (#89, by @ibrahimkzmv)
+
+- **Three new LLM providers.** First-class `provider: 'deepseek'` (`deepseek-chat`, `deepseek-reasoner`), `provider: 'minimax'` (global and China endpoints via `MINIMAX_BASE_URL`), and verified Groq via OpenAI-compatible `baseURL` in `examples/19-groq.ts`. (#113 and #114 by @hkalex; #121 by @mvanhorn)
+
+- **Context management strategies.** New `AgentConfig.contextStrategy` keeps long runs under token ceilings with four strategies: `sliding-window`, `summarize`, `compact` (rule-based, no extra LLM call), and `custom`. (#88 by @ibrahimkzmv; #111, #119 by @JackChen-me)
+
+- **Tool output cost controls.** New `AgentConfig.maxToolOutputChars` and per-tool `ToolDefinition.maxOutputChars` truncate large outputs (head + tail with a marker). New `AgentConfig.compressToolResults` compresses older tool results once the agent has moved on; errors are never compressed. (#110, #115, #116, #117, #118 by @JackChen-me)
+
+- **CLI (`oma`).** New binary for shell and CI with `oma run`, `oma task`, `oma provider`, JSON-first output, and stable exit codes. Docs at `docs/cli.md`. (#107 by @ibrahimkzmv)
+
+- **`AgentConfig.customTools`.** Inject tool definitions at config time from the orchestrator. Bypasses preset/allowlist filtering but still respects `disallowedTools`. (#109, #112 by @JackChen-me)
+
+- **`glob` built-in tool.** Find files by glob pattern, sorted by modification time. (#102 by @ibrahimkzmv)
+
+### Fixes
+
+- **`AbortSignal` propagation.** Abort now reaches tool execution, the Gemini adapter, and the abort queue path. (#104 fixes #99, #100, #101, by @JackChen-me)
+
+- **Error event propagation.** `AgentRunner.run()` now surfaces error events to callers. (#103 fixes #98, by @JackChen-me)
+
+### Examples
+
+- `examples/16-mcp-github.ts`: full MCP wiring
+- `examples/17-minimax.ts`, `examples/18-deepseek.ts`, `examples/19-groq.ts`: provider quickstarts
+- `examples/with-vercel-ai-sdk/`: Next.js + OMA `runTeam()` + AI SDK `useChat`
+
+### Docs
+
+- READMEs (EN/ZH) expanded: CLI, MCP, context strategies, tool output control, `customTools`. ZH caught up with EN on items that shipped in 1.1.
+
+### Install
+
+```bash
+npm install @jackchen_me/open-multi-agent@1.2.0
+```
+
+Thanks to @hkalex, @ibrahimkzmv, and @mvanhorn for the external contributions that make this release.
+
+**Full changelog:** https://github.com/JackChen-me/open-multi-agent/compare/v1.1.0...v1.2.0
+
+## 1.1.0 - 2026-04-11
+
+First minor release since `1.0.1`. Six new features, two fixes, two new examples, and one behavior change you should read before upgrading.
+
+### ⚠️ Behavior change (read this before upgrading)
+
+**Agents now run with default-deny, dependency-scoped context (#87).**
+An agent only sees results from tasks it explicitly `dependsOn`, instead of every prior task in the run. This prevents context leakage between unrelated agents and keeps token usage predictable in larger teams.
+
+If your existing teams relied on agents implicitly seeing all prior task output, add explicit `dependsOn` edges in your task graph. No API change is required for `runTeam()` users whose coordinator already produces a sensible DAG.
+
+This change was prompted by a combination of competitive analysis (XCLI scopes sub-agent context to a minimum file set + tool allowlist by default) and a [public post on X by guk2472](https://x.com/guk2472/status/2040833298063045075) flagging inter-agent context pollution as the real production killer in multi-agent systems. Thanks for the signal.
+
+### Features
+
+- **AbortSignal support** for `runTeam()` and `runTasks()` (#69). Cancel a run mid-flight from the caller.
+- **Skip coordinator for simple goals** in `runTeam()` (#70). Single-agent goals no longer pay the coordinator round-trip.
+- **Token budget management** at agent and orchestrator level (#71). Stops runs that exceed a configured budget instead of silently burning tokens.
+- **Tool allowlist / denylist / preset** (#83). Restrict which tools an agent can call without rebuilding the registry.
+- **Customizable coordinator** (#85). Override the coordinator's model, system prompt, tools, `toolPreset`, and `disallowedTools` via `CoordinatorConfig`.
+- **Dependency-scoped agent context** (#87). See behavior change above.
+
+### Fixes
+
+- **Per-agent mutex** prevents concurrent runs on the same `Agent` instance from corrupting state (#77).
+- **Duplicate progress events** in the short-circuit path for `runTeam()` are gone, and `completedTaskCount` is no longer double-incremented (#82).
+
+### Examples
+
+- Multi-source research aggregation (#79)
+- Multi-perspective code review (#80)
+
+### Docs
+
+- README top fold rewritten and Examples section trimmed (#95)
+- Coverage badge updated to 88% (#57)
+- `DECISIONS.md` restructured to signal openness on MCP and A2A
+
+### Install
+
+```bash
+npm install @jackchen_me/open-multi-agent@1.1.0
+```
+
+## 1.0.1 - 2026-04-05
+
+The `1.0.1`, `0.2.0`, and `0.1.0` entries are summarized from npm package
+metadata and Git history because no GitHub Release notes were published for
+them.
+
+### Changed
+
+- Limited the npm package to compiled output and package documentation instead
+  of publishing repository source, tests, examples, and project metadata.
+- Added contract tests for the Anthropic, OpenAI, Gemini, and GitHub Copilot
+  adapters, plus opt-in provider E2E tests, raising reported coverage from 71%
+  to 88% (#56).
+
+### Compatibility
+
+- The compiled `dist/` output and public runtime API are unchanged from
+  `1.0.0`.
+
+## 1.0.0 - 2026-04-05
+
+### What's new since 0.2.0
+
+#### Features
+- **Structured output** — optional `outputSchema` (Zod) on any agent, with auto-retry on validation failure (#36, #38)
+- **Task retry with exponential backoff** — `maxRetries`, `retryDelayMs`, `retryBackoff` per task (#37)
+- **Observability** — `onTrace` callback emits structured spans for LLM calls, tool calls, tasks, and agent runs (#40)
+- **Lifecycle hooks** — `beforeRun` / `afterRun` on AgentConfig for prompt rewriting and result post-processing (#45)
+- **Human-in-the-loop** — `onApproval` callback between task execution rounds to gate the next batch (#46)
+- **Loop detection** — detects stuck agents repeating the same tool calls or text, with configurable `warn` / `terminate` / custom handler (#49)
+- **Grok (xAI) adapter** — first-class support with dedicated GrokAdapter (#44)
+- **Fallback tool-call extraction** — local models that emit tool calls as plain text are now handled automatically (#47)
+
+#### Testing & quality
+- 340 tests, 71% line coverage across `src/` (#53)
+- Coverage badge added to README (#55)
+
+#### Full changelog
+https://github.com/JackChen-me/open-multi-agent/compare/v0.2.0...v1.0.0
+
+## 0.2.0 - 2026-04-03
+
+### Added
+
+- Added GitHub Copilot as a first-class LLM provider (#9).
+- Added `baseURL` and `apiKey` overrides for OpenAI-compatible APIs and local
+  servers such as Ollama, vLLM, and LM Studio.
+- Agents can declare an `outputSchema`. Final JSON output is validated with
+  Zod, exposed through `result.structured`, and retried once with validation
+  feedback when necessary (#36, #38).
+- Added task-level retry with capped exponential backoff and accumulated token
+  usage across attempts (#37).
+
+### Fixed
+
+- Blocked tasks are unblocked after their dependencies complete instead of
+  remaining stuck indefinitely.
+- `randomUUID` is imported from `node:crypto` so the package works on its
+  declared Node.js 18 minimum.
+
+## 0.1.0 - 2026-04-01
+
+Initial npm release.
+
+### Added
+
+- `OpenMultiAgent` with `runAgent()` for one-shot work, `runTeam()` for
+  coordinator-planned teams, and `runTasks()` for explicit task pipelines.
+- Role-based teams with shared memory, inter-agent messaging,
+  dependency-aware scheduling, and parallel execution.
+- Anthropic and OpenAI adapters, a public custom-adapter contract, and a typed
+  tool framework with five built-in tools.
