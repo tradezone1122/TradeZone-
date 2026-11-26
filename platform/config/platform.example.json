@@ -1,8 +1,49 @@
 {
+  "_comment": "Copy to config/platform.json and fill in your values",
+
   "upstreams": [
-    {"name": "local", "base_url": "http://127.0.0.1:8080/v1", "api_key_env": "UP_LOCAL_KEY", "models": ["*"], "timeout": 300}
+    {
+      "_comment": "Kimi K3 Pro — primary model (set KIMI_API_KEY in environment)",
+      "name":        "kimi",
+      "base_url":    "https://api.moonshot.cn/v1",
+      "api_key_env": "KIMI_API_KEY",
+      "models":      ["moonshot-v1-*", "kimi-k3-*"]
+    },
+    {
+      "_comment": "Local Ollama — zero-cost local inference",
+      "name":        "ollama",
+      "base_url":    "http://localhost:11434/v1",
+      "api_key_env": "",
+      "models":      ["llama3*", "qwen*", "mistral*"]
+    },
+    {
+      "_comment": "OpenAI-compatible custom endpoint",
+      "name":        "custom",
+      "base_url":    "http://localhost:8080/v1",
+      "api_key_env": "CUSTOM_API_KEY",
+      "models":      ["*"]
+    }
   ],
-  "default_model": "local/your-model-id",
-  "rag": {"enabled": true, "top_k": 4, "max_chars": 3000},
-  "sandbox": {"allow": ["python3", "ls", "cat", "echo", "grep", "wc", "head", "tail"], "timeout": 10, "mem_mb": 256}
+
+  "default_model": "moonshot-v1-128k",
+
+  "rag": {
+    "enabled": true,
+    "top_k":   5,
+    "max_chars": 4000
+  },
+
+  "sandbox": {
+    "backend":      "local",
+    "allow":        ["python3", "ls", "cat", "echo", "grep", "wc", "head", "tail", "git"],
+    "timeout":      15,
+    "mem_mb":       512,
+    "max_output":   30000,
+    "docker_image": "platform-sandbox:latest",
+    "cpus":         2
+  },
+
+  "tools_enabled": true,
+
+  "max_upload_bytes": 20971520
 }
