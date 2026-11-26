@@ -13,6 +13,7 @@ from starlette.staticfiles import StaticFiles
 from . import settings, store, sandbox, skills, memory, agents
 from .router import Router, RouteError
 from .orch_api import ROUTES as ORCH_ROUTES
+from .multi_agent_api import ROUTES as MULTI_AGENT_ROUTES
 
 log = logging.getLogger("platform")
 
@@ -255,4 +256,5 @@ def build() -> Starlette:
         Route("/artifacts/{aid}", art_view),
         Mount("/chat-assets", StaticFiles(directory=settings.ROOT / "frontend" / "chat-assets")),
         *ORCH_ROUTES,
+        *MULTI_AGENT_ROUTES,
     ])

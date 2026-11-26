@@ -1,0 +1,13 @@
+# Binary/media files (keep code only in git)
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.ico
+**/*.pt
+**/*.pth
+**/*.bin
+**/*.safetensors
+**/*.pkl
+**/*.model
+**/*.tiktoken
