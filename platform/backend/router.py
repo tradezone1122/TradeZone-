@@ -1,6 +1,6 @@
-"""Model routing to OpenAI-compatible upstreams (Splaude/Splash server, Kimi-compatible
-servers, hosted APIs...). Routing: "<upstream>/<model>" prefix, else first upstream that
-lists the model, else the default upstream."""
+"""Model routing to OpenAI-compatible upstreams (Kimi K3 Pro, Ollama, local models...).
+Routing: "<upstream>/<model>" prefix, else first upstream that lists the model,
+else the default upstream."""
 from __future__ import annotations
 import json, os
 import requests
@@ -41,7 +41,7 @@ class Router:
                 for m in r.json().get("data", []):
                     m = dict(m); m["id"] = f"{name}/{m.get('id','')}"
                     out.append(m)
-            except Exception as e:  # upstream down: report, do not invent models
+            except Exception as e:
                 out.append({"id": f"{name}/(unreachable)", "object": "model", "error": str(e)[:120]})
         return out
 
@@ -72,3 +72,35 @@ class Router:
         if r.status_code != 200:
             return r.status_code, iter([r.content])
         return 200, r.iter_content(chunk_size=None)
+
+    # ── QueryEngine-compatible helpers ────────────────────────────────────────
+
+    def chat(self, payload: dict) -> dict:
+        """Non-streaming chat. Returns parsed JSON response dict."""
+        status, data = self.complete(payload)
+        if status != 200:
+            exc = RouteError(f"upstream returned {status}", status)
+            exc.status_code = status
+            raise exc
+        return data
+
+    def stream_chat(self, payload: dict):
+        """Streaming chat. Yields parsed SSE chunk dicts."""
+        status, chunks = self.stream(payload)
+        if status != 200:
+            exc = RouteError(f"upstream returned {status}", status)
+            exc.status_code = status
+            raise exc
+        buf = b""
+        for raw in chunks:
+            buf += raw
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                line = line.strip()
+                if not line or line == b"data: [DONE]":
+                    continue
+                if line.startswith(b"data: "):
+                    try:
+                        yield json.loads(line[6:])
+                    except (json.JSONDecodeError, ValueError):
+                        continue
