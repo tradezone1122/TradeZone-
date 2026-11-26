@@ -1,0 +1,300 @@
+"""Startup preflight checks for persistent ChromaDB state.
+
+GH #216 (v4.9.1): probe retries + inconclusive-on-timeout + atomic rename.
+The previous single-attempt quarantine turned any transient failure
+(file locks after client restart, slow disk, cold GPU init) into a
+full-corpus reindex loop on Windows stdio MCP clients. The reporter's
+forensic analysis on issue #216 documented the failure mode and the
+fixes below were validated on their environment before merging.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+from .config import BASE_DIR, _get, config
+
+PROBE_ATTEMPTS = 3
+PROBE_RETRY_DELAY_SECONDS = 5
+PROBE_TIMEOUT_SECONDS = 30
+AUTO_REPAIR_BACKUPS_KEPT = 3  # GH #267: unbounded auto-repair backups once filled a disk (197 copies, 76 GB)
+_AUTO_REPAIR_DIR_NAME = re.compile(r"auto-repair-[0-9]{8}-[0-9]{6}")  # what _backup_active_index creates
+
+# Cloud-sync folders break ChromaDB (HNSW mmap) and SQLite WAL/SHM:
+# the provider opens handles on live files to upload them, racing with
+# the engine's own mmap/WAL writes → native access violation (0xC0000005
+# on Windows, SIGBUS on macOS/Linux) → corrupted segments → auto-repair
+# wipes the index. Match on any path segment to catch OneDrive, iCloud,
+# Dropbox, Google Drive, Box, pCloud, Mega, Nextcloud, Sync.com, MEGAsync.
+_CLOUD_SYNC_PATTERNS = re.compile(
+    r"(?:^|[\\/])("
+    r"OneDrive(?:[ -][^\\/]*)?"
+    r"|iCloud(?:[ ]Drive)?|com~apple~CloudDocs"
+    r"|Dropbox(?:[ -][^\\/]*)?"
+    r"|Google[ ]Drive|GoogleDrive|My[ ]Drive"
+    r"|Box(?:[ ]Sync)?"
+    r"|pCloudDrive|pCloud"
+    r"|MEGA(?:sync)?"
+    r"|Nextcloud|ownCloud"
+    r"|Sync|Syncthing"
+    r")(?:[\\/]|$)"
+)
+
+
+def _detect_cloud_sync_provider(path: Path) -> str | None:
+    """Return the matched provider segment when ``path`` resolves under a
+    known cloud-sync folder, otherwise ``None``. Case-insensitive.
+    """
+    try:
+        resolved = str(path.resolve())
+    except OSError:
+        resolved = str(path)
+    match = _CLOUD_SYNC_PATTERNS.search(resolved) or _CLOUD_SYNC_PATTERNS.search(resolved.replace("/", "\\"))
+    if match:
+        return match.group(1)
+    # Case-insensitive fallback for odd-cased folders.
+    match_ci = _CLOUD_SYNC_PATTERNS.search(resolved, re.IGNORECASE) if hasattr(re, "search") else None
+    return match_ci.group(1) if match_ci else None
+
+
+def _check_cloud_sync() -> None:
+    """Abort startup when ``data_dir`` lives under a cloud-sync folder,
+    unless ``paths.allow_cloud_sync: true`` is set as an opt-in override.
+
+    Cloud sync corrupts ChromaDB HNSW segments (mmap) and SQLite WAL —
+    see _CLOUD_SYNC_PATTERNS docstring for the failure mode.
+    """
+    provider = _detect_cloud_sync_provider(config.data_dir)
+    if not provider:
+        return
+    allow = bool(_get("paths", "allow_cloud_sync", False))
+    if allow:
+        _log(
+            f"[PREFLIGHT] WARNING: data_dir is under cloud sync ({provider}): {config.data_dir}. "
+            f"Index corruption is likely. Running anyway because paths.allow_cloud_sync=true."
+        )
+        return
+    _log(
+        f"[PREFLIGHT] FATAL: data_dir is under cloud sync ({provider}): {config.data_dir}\n"
+        f"  Cloud sync corrupts ChromaDB (HNSW mmap) and SQLite WAL — the engine will crash with\n"
+        f"  access violations (0xC0000005 on Windows, SIGBUS on *nix) and auto-repair will wipe\n"
+        f"  the index.\n"
+        f"  Fix: move paths.data_dir to a local path (e.g. %LOCALAPPDATA%\\knowledge-rag\\data on\n"
+        f"  Windows, ~/.local/share/knowledge-rag/data on Linux/macOS), or set paths.allow_cloud_sync=true\n"
+        f"  to acknowledge the risk and continue."
+    )
+    raise SystemExit(78)  # EX_CONFIG
+
+
+def _log(msg: str) -> None:
+    """Emit preflight message to stderr and append to data/preflight.log.
+
+    Persisting to a file matters because stdio MCP clients hide the server's
+    stderr in their own logs — without the file, users could only ever see
+    the truncated exit code, not the actual Chroma stack trace.
+    """
+    line = f"[{datetime.now().isoformat(timespec='seconds')}] {msg}"
+    print(line, file=sys.stderr)
+    try:
+        log_file = config.data_dir / "preflight.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def _backup_active_index(reason: str) -> Path:
+    """Atomically move active ChromaDB state aside so the server can rebuild.
+
+    Uses os.rename (atomic on same volume) instead of shutil.move — the
+    fallback copy+rmtree path in shutil.move leaks a partial copy in
+    backups/ AND a partially deleted live chroma_db/ when another process
+    holds a segment file open (WinError 32).
+
+    The two moves (metadata JSON + chroma_db dir) must be all-or-nothing.
+    If we moved chroma_db first and metadata failed (antivirus scanning
+    the JSON, brief file lock), restart would find `chroma_db` gone but
+    `index_metadata.json` still live — incremental reindex would then
+    read the orphan metadata, mark every doc as "already indexed", and
+    silently produce an empty collection. To prevent that, metadata is
+    moved first (small file, low lock probability) and chroma_db is
+    wrapped in try/except that rolls the metadata rename back before
+    re-raising. Restart then sees the pristine pre-quarantine state
+    and re-runs preflight cleanly.
+    """
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_dir = config.data_dir / "backups" / f"auto-repair-{stamp}"
+    backup_dir.mkdir(parents=True, exist_ok=False)
+
+    metadata_file = config.data_dir / "index_metadata.json"
+    metadata_backup = backup_dir / f"index_metadata.{reason}.json"
+    metadata_moved = False
+    try:
+        if metadata_file.exists():
+            os.rename(str(metadata_file), str(metadata_backup))
+            metadata_moved = True
+        if config.chroma_dir.exists():
+            os.rename(str(config.chroma_dir), str(backup_dir / f"chroma_db.{reason}"))
+    except OSError:
+        if metadata_moved:
+            # Rollback the metadata move so the two files stay consistent.
+            # If the rollback itself fails (unlikely — dst dir is fresh)
+            # we still re-raise the original OSError so the caller can
+            # exit cleanly instead of leaving the system in a wedged state.
+            with contextlib.suppress(OSError):
+                os.rename(str(metadata_backup), str(metadata_file))
+        raise
+    finally:
+        with contextlib.suppress(OSError):
+            backup_dir.rmdir()  # GH #267: an empty folder would take a kept slot; rmdir spares any holding data
+
+    return backup_dir
+
+
+def _prune_auto_repair_backups(new_backup: Path) -> None:
+    """Keep only the newest AUTO_REPAIR_BACKUPS_KEPT auto-repair backups, ``new_backup`` included."""
+    with os.scandir(new_backup.parent) as entries:
+        # Symlinks are skipped here; rmtree refuses Windows junctions, so no link is ever followed.
+        other_dirs = {entry.name for entry in entries if entry.is_dir(follow_symlinks=False)} - {new_backup.name}
+    older = sorted((name for name in other_dirs if _AUTO_REPAIR_DIR_NAME.fullmatch(name)), reverse=True)
+    removed = 0
+    # new_backup takes one kept slot even when a clock change made its stamp sort below the others.
+    for name in older[AUTO_REPAIR_BACKUPS_KEPT - 1 :]:
+        try:
+            shutil.rmtree(new_backup.parent / name)
+            removed += 1
+        except OSError as exc:  # e.g. a file still held open on Windows
+            _log(f"[RECOVERY] could not delete old backup {new_backup.parent / name} ({exc}); will retry next repair")
+    _log(f"[RECOVERY] removed {removed} old auto-repair backup(s)")
+
+
+def _probe_chroma(timeout_seconds: int = PROBE_TIMEOUT_SECONDS) -> subprocess.CompletedProcess[str]:
+    """Check Chroma in a child process so native crashes do not kill MCP startup."""
+    code = r"""
+import chromadb
+from chromadb.errors import NotFoundError
+
+from mcp_server.config import config
+
+if not config.chroma_dir.exists():
+    print("missing")
+    raise SystemExit(0)
+
+client = chromadb.PersistentClient(path=str(config.chroma_dir))
+try:
+    # GH #248/#252: read only. Creating it here persisted Chroma's default
+    # embedding function, which the server then refused to open.
+    collection = client.get_collection(name=config.collection_name, embedding_function=None)
+except NotFoundError:
+    print("missing")
+    raise SystemExit(0)
+print(collection.count())
+"""
+    env = os.environ.copy()
+    env["KNOWLEDGE_RAG_DIR"] = str(BASE_DIR.resolve())
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(BASE_DIR.resolve()),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout_seconds,
+        check=False,
+    )
+
+
+def run_preflight(timeout_seconds: int = PROBE_TIMEOUT_SECONDS) -> bool:
+    """Return True when active Chroma state was moved aside for repair.
+
+    Runs the probe up to PROBE_ATTEMPTS times so transient failures
+    (file locks lingering from a previous PID, slow disk, cold GPU init)
+    do not trigger a destructive quarantine. TimeoutExpired is treated
+    as inconclusive — the index is kept and the user can debug from
+    preflight.log without losing the corpus. Only PROBE_ATTEMPTS
+    consecutive non-zero exits quarantine.
+
+    If os.rename fails while quarantining (e.g. another process still
+    holds a segment file open on Windows) the index is left untouched
+    and the process exits with EX_TEMPFAIL (75) instead of crashing
+    halfway with a partial move.
+    """
+    _check_cloud_sync()
+
+    last_result: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(1, PROBE_ATTEMPTS + 1):
+        try:
+            result = _probe_chroma(timeout_seconds=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            _log(
+                f"[PREFLIGHT] attempt {attempt}/{PROBE_ATTEMPTS}: probe timed out "
+                f"after {timeout_seconds}s — inconclusive, keeping index"
+            )
+            return False
+        if result.returncode == 0:
+            if attempt > 1:
+                _log(f"[PREFLIGHT] attempt {attempt}: OK (recovered from transient failure)")
+            return False
+        stderr_tail = (result.stderr or "").strip()[-1500:]
+        _log(
+            f"[PREFLIGHT] attempt {attempt}/{PROBE_ATTEMPTS}: probe failed with code {result.returncode}\n{stderr_tail}"
+        )
+        last_result = result
+        if attempt < PROBE_ATTEMPTS:
+            time.sleep(PROBE_RETRY_DELAY_SECONDS)
+
+    assert last_result is not None
+    reason = "segfault" if last_result.returncode in (-11, 139) else "failed"
+    _log(f"[RECOVERY] preflight failed {PROBE_ATTEMPTS}x (last exit code {last_result.returncode}); moving index aside")
+    try:
+        backup_dir = _backup_active_index(reason)
+    except OSError as exc:
+        _log(
+            f"[PREFLIGHT] could not move index aside ({exc}); leaving it untouched "
+            f"to avoid partial corruption. Retry after freeing file handles."
+        )
+        raise SystemExit(75) from exc
+    try:
+        if backup_dir.exists():  # GH #267: the empty folder is dropped when there was nothing to move
+            _log(f"[RECOVERY] moved active index to {backup_dir}")
+            _prune_auto_repair_backups(backup_dir)
+    except OSError as exc:  # best effort: old backups never fail the repair
+        _log(f"[RECOVERY] could not prune old backups in {backup_dir.parent} ({exc})")
+    return True
+
+
+if __name__ == "__main__":
+    # ponytail: runnable self-check for _detect_cloud_sync_provider. No framework.
+    cases = [
+        (r"C:\Users\x\OneDrive\Documentos\knowledge-rag\data", "OneDrive"),
+        (r"C:\Users\x\OneDrive - Contoso\knowledge-rag\data", "OneDrive - Contoso"),
+        (r"/Users/x/Library/Mobile Documents/com~apple~CloudDocs/kr", "com~apple~CloudDocs"),
+        (r"/Users/x/iCloud Drive/kr", "iCloud Drive"),
+        (r"/home/x/Dropbox/kr/data", "Dropbox"),
+        (r"C:\Users\x\Google Drive\kr", "Google Drive"),
+        (r"/home/x/GoogleDrive/kr", "GoogleDrive"),
+        (r"C:\Users\x\pCloudDrive\kr", "pCloudDrive"),
+        (r"/home/x/MEGAsync/kr", "MEGAsync"),
+        (r"/home/x/Nextcloud/kr", "Nextcloud"),
+        (r"C:\knowledge-rag\data", None),
+        (r"/var/lib/knowledge-rag/data", None),
+        (r"C:\Users\x\AppData\Local\knowledge-rag\data", None),
+    ]
+    failed = 0
+    for raw, expected in cases:
+        got = _detect_cloud_sync_provider(Path(raw))
+        status = "OK" if got == expected else "FAIL"
+        if got != expected:
+            failed += 1
+        print(f"[{status}] {raw} → {got!r} (expected {expected!r})")
+    assert failed == 0, f"{failed} case(s) failed"
+    print(f"\nAll {len(cases)} cloud-sync detection cases passed.")

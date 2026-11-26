@@ -1,0 +1,8 @@
+{
+  "upstreams": [
+    {"name": "local", "base_url": "http://127.0.0.1:8080/v1", "api_key_env": "UP_LOCAL_KEY", "models": ["*"], "timeout": 300}
+  ],
+  "default_model": "local/your-model-id",
+  "rag": {"enabled": true, "top_k": 4, "max_chars": 3000},
+  "sandbox": {"allow": ["python3", "ls", "cat", "echo", "grep", "wc", "head", "tail"], "timeout": 10, "mem_mb": 256}
+}

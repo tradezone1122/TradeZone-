@@ -1,0 +1,105 @@
+"""Local file replacement with an explicit rollback boundary for document CRUD."""
+
+from __future__ import annotations
+
+import logging
+import os
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from time import sleep
+
+logger = logging.getLogger(__name__)
+
+# ERROR_ACCESS_DENIED / ERROR_SHARING_VIOLATION: a scanner, indexer or reader holds
+# the path without FILE_SHARE_DELETE, and Windows cannot replace over it until it lets go.
+_WINDOWS_HELD_ERRORS = frozenset({5, 32})
+_REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+def replace_with_retry(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+    """``os.replace`` that waits out a transient Windows handle on either path (GH #249).
+
+    Only PermissionError carrying winerror 5 or 32 is retried, for about 1.5 s; then
+    it is re-raised, so a real permission problem still surfaces. Elsewhere this is
+    a plain ``os.replace``.
+    """
+    for delay in _REPLACE_RETRY_DELAYS:
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError as exc:
+            if getattr(exc, "winerror", None) not in _WINDOWS_HELD_ERRORS:
+                raise
+        sleep(delay)
+    os.replace(source, destination)
+
+
+class StagedTextFile:
+    """Prepare beside the destination so rename works on every supported OS."""
+
+    def __init__(self, destination: Path, content: str) -> None:
+        self.destination = destination
+        self.backup: Path | None = None
+        self.published = False
+        self.committed = False
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=".rag-pending-",
+            suffix=destination.suffix,
+            delete=False,
+        ) as stream:
+            self.path = Path(stream.name)
+            try:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            except BaseException:
+                stream.close()
+                self.path.unlink(missing_ok=True)
+                raise
+
+    def publish(self) -> None:
+        """Keep the prior bytes on disk until the index and metadata commit."""
+        if self.destination.exists():
+            with tempfile.NamedTemporaryFile(
+                dir=self.destination.parent, prefix=".rag-backup-", delete=False
+            ) as stream:
+                backup = Path(stream.name)
+            try:
+                replace_with_retry(self.destination, backup)
+            except BaseException:
+                backup.unlink(missing_ok=True)
+                raise
+            self.backup = backup
+        replace_with_retry(self.path, self.destination)
+        self.published = True
+
+    def close(self) -> None:
+        """Restore old bytes after failure; never delete a backup whose restore failed."""
+        if not self.committed:
+            if self.backup is not None:
+                replace_with_retry(self.backup, self.destination)
+            elif self.published:
+                self.destination.unlink(missing_ok=True)
+        for temporary in (self.path, self.backup):
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError as exc:
+                    # Cleanup must not turn an already committed write into a failure.
+                    logger.warning("Could not remove transaction temporary file %s: %s", temporary, exc)
+
+
+@contextmanager
+def staged_text_file(destination: Path, content: str) -> Iterator[StagedTextFile]:
+    """Stage, publish explicitly, and retain rollback until ``committed`` is true."""
+    staged = StagedTextFile(destination, content)
+    try:
+        yield staged
+    finally:
+        staged.close()

@@ -1,0 +1,3 @@
+claude-code-sandbox (https://github.com/textcortex/claude-code-sandbox) declares "license": "MIT" in package.json
+(no LICENSE file was in the archive). Only the idea of running commands in a Docker container with /workspace
+and a non-root user was reused; no source files were copied.

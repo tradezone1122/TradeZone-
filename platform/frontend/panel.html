@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Platform panel</title>
+<style>
+ :root{color-scheme:light dark;--b:#d0d0d0;--m:#727272}
+ body{font:14px system-ui;margin:0;display:grid;grid-template-columns:200px 1fr;min-height:100vh}
+ nav{border-right:1px solid var(--b);padding:12px}nav a{display:block;padding:6px 8px;cursor:pointer;border-radius:6px}
+ nav a.on{background:color-mix(in srgb,currentColor 12%,transparent)}
+ main{padding:16px;max-width:900px}h2{margin-top:0}
+ input,textarea,select,button{font:inherit;padding:6px 8px;border:1px solid var(--b);border-radius:6px;background:transparent;color:inherit}
+ textarea{width:100%;min-height:80px}pre{white-space:pre-wrap;border:1px solid var(--b);padding:8px;border-radius:6px}
+ .row{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap}.card{border:1px solid var(--b);border-radius:6px;padding:8px;margin:6px 0}.m{color:var(--m)}
+ @media(max-width:640px){body{grid-template-columns:1fr}nav{display:flex;flex-wrap:wrap;border:0;border-bottom:1px solid var(--b)}}
+</style>
+<nav id="nav"><a href="/">← Chat</a></nav><main id="main"></main>
+<script>
+const $=(s,r=document)=>r.querySelector(s), esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const J=async(u,o)=>{const r=await fetch(u,o);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d={raw:t}}if(!r.ok)throw new Error(d.error?.message||r.statusText);return d};
+const tabs={
+ async Agents(m){const a=(await J('/api/agents')).agents;
+  m.innerHTML=`<h2>Run an agent</h2><div class=row><select id=ag>${a.map(x=>`<option>${esc(x.name)}</option>`).join('')}</select>
+  <input id=tok placeholder="X-Admin-Token (only if tools are enabled)" size=34></div>
+  <textarea id=task placeholder="Task"></textarea><div class=row><button id=go>Run</button></div><div id=out></div>`;
+  $('#go').onclick=async()=>{const out=$('#out');out.textContent='Running…';
+   try{const r=await J('/api/agent/run',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':$('#tok').value},body:JSON.stringify({agent:$('#ag').value,task:$('#task').value})});
+    out.innerHTML=`<h3>Answer</h3><pre>${esc(r.answer)}</pre><h3>Tool activity (${r.steps} steps)</h3>`+(r.trace.map(t=>`<div class=card>${esc(t.agent)} → <b>${esc(t.tool)}</b> ${t.ok?'ok':'<b>failed</b>'} <span class=m>${t.ms}ms, depth ${t.depth}</span></div>`).join('')||'<span class=m>none</span>')}
+   catch(e){out.innerHTML=`<pre>${esc(e.message)}</pre>`}}},
+ async Knowledge(m){m.innerHTML=`<h2>Knowledge base</h2><div class=row><input type=file id=f><button id=up>Upload</button></div>
+  <div class=row><input id=q placeholder="Search" size=40><button id=s>Search</button></div><div id=o></div>`;
+  $('#up').onclick=async()=>{const f=$('#f').files[0];if(!f)return;try{const r=await J('/api/upload?filename='+encodeURIComponent(f.name),{method:'POST',body:f});$('#o').innerHTML=`<div class=card>Indexed ${r.chunks_indexed} chunk(s) from ${esc(r.filename)}</div>`}catch(e){$('#o').innerHTML=`<pre>${esc(e.message)}</pre>`}};
+  $('#s').onclick=async()=>{const r=await J('/api/rag/search?q='+encodeURIComponent($('#q').value));$('#o').innerHTML=r.hits.map(h=>`<div class=card><b>${esc(h.filename)}</b> <span class=m>score ${h.score}</span><pre>${esc(h.content)}</pre></div>`).join('')||'<span class=m>No results</span>'}},
+ async Memory(m){const load=async()=>{const r=(await J('/api/memory')).memories;$('#l').innerHTML=r.map(x=>`<div class=card>${esc(x.content)} <button data-id=${x.id}>delete</button></div>`).join('')||'<span class=m>Empty</span>';
+   document.querySelectorAll('#l button').forEach(b=>b.onclick=async()=>{await J('/api/memory/'+b.dataset.id,{method:'DELETE'});load()})};
+  m.innerHTML=`<h2>Long-term memory</h2><div class=row><input id=c size=50 placeholder="Fact to remember"><button id=a>Save</button></div><div id=l></div>`;
+  $('#a').onclick=async()=>{await J('/api/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:$('#c').value})});$('#c').value='';load()};load()},
+ async Artifacts(m){const r=(await J('/api/artifacts/list')).artifacts;m.innerHTML='<h2>Artifacts</h2>'+(r.map(a=>`<div class=card><a href="/artifacts/${esc(a.id)}" target=_blank>${esc(a.title)}</a> <span class=m>v${a.version} · ${esc(a.kind)}</span></div>`).join('')||'<span class=m>None yet</span>')},
+ async Skills(m){const r=(await J('/api/skills')).skills;m.innerHTML='<h2>Skills</h2>'+r.map(s=>`<div class=card><b>${esc(s.name)}</b><div class=m>${esc(s.description.slice(0,200))}</div></div>`).join('')},
+ async Sessions(m){const r=(await J('/api/sessions')).sessions;m.innerHTML='<h2>Sessions</h2>'+(r.map(s=>`<div class=card><a href="#" data-s="${esc(s.session)}">${esc(s.session)}</a> <span class=m>${s.n} messages</span></div>`).join('')||'<span class=m>None yet</span>')+'<div id=h></div>';
+  m.querySelectorAll('a[data-s]').forEach(a=>a.onclick=async e=>{e.preventDefault();const h=(await J('/api/history?session='+encodeURIComponent(a.dataset.s))).messages;$('#h').innerHTML=h.map(x=>`<div class=card><b>${esc(x.role)}</b><pre>${esc(x.content)}</pre></div>`).join('')})}
+};
+const nav=$('#nav');Object.keys(tabs).forEach((k,i)=>{const a=document.createElement('a');a.textContent=k;a.onclick=()=>{nav.querySelectorAll('a').forEach(x=>x.classList.remove('on'));a.classList.add('on');tabs[k]($('#main')).catch(e=>$('#main').innerHTML=`<pre>${esc(e.message)}</pre>`)};nav.append(a);if(!i)a.click()});
+</script>
